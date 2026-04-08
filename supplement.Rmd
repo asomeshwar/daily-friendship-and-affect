@@ -1,0 +1,2390 @@
+---
+title: |
+    | Daily Close Friendship Experiences in Female Adolescents: Links to Daily Affective States
+    | Supplemental File
+author: "Amala Someshwar, Sara J. Weston, Hannah L. Schacter, Jennifer H. Pfeifer"
+output:
+  bookdown::pdf_document2:
+    toc: true
+    number_sections: true
+    fig_width: 14
+    fig_height: 10
+header-includes:
+  - \usepackage{pdflscape}
+  - \usepackage{booktabs}
+  - \usepackage{hyperref}
+  - \usepackage{xurl}
+  - \usepackage{url}
+---
+# Workspace
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = F, message = F)
+```
+
+## Packages
+
+```{r, results='hide', message = F, warning = F}
+library(tidyverse)
+library(ggplot2)
+library(here)
+library(rio)
+library(lubridate)
+library(dplyr)
+library(psych)
+library(lme4)
+library(lmerTest)
+library(broom)
+library(purrr)
+library(broom.mixed)
+library(effects)
+library(lattice)
+library(readxl)
+library(janitor)
+library(kableExtra)
+library(knitr)
+library(sjPlot)
+library(papaja)
+library(corx)
+library(patchwork)
+library(ggpubr)
+library(emmeans)
+library(stringr)
+library(formatR)
+library(extrafont)
+loadfonts(device = "pdf")
+```
+
+This supplemental file provides complete documentation of all analytical steps, including data cleaning, model specifications, and sensitivity analyses referenced in the main manuscript. All analyses were conducted in R.
+
+# Data
+
+```{r load-data}
+W4S2_dates <- read.csv(here("data/DATES_Wave4.csv")) %>% filter(w4s2date !="")
+Demographics_Wave4 <- import(here("data/Demographics_Wave4.xlsx"))
+dsr_long <- read.csv(here("data/DSR_Wave4_wide.csv"))
+```
+
+### Select variables
+
+```{r}
+dsr_long = dsr_long %>% 
+  select(
+    SID,
+    StartDate,
+    EndDate,
+    matches("DSR_[2,3]"),
+    Q6,
+    matches("Q7_"),
+    Q9
+  ) %>% 
+  rename(tagid = SID)
+
+dsr_long = dsr_long %>%
+  rename(
+    Q7_2  = Q7_4,
+    Q7_3  = Q7_5,
+    Q7_4  = Q7_6,
+    Q7_5  = Q7_7,
+    Q7_6  = Q7_8,
+    Q7_7  = Q7_9,
+    Q7_8  = Q7_10,
+    Q7_9  = Q7_11,
+    Q7_10  = Q7_12,
+  )
+
+# dsr_long %>% 
+#   distinct(tagid, Q9) %>% 
+#   count(Q9)
+
+#44 participants in relationship, 70 not in relationship, NA 14
+```
+
+### Merge datasets
+
+```{r dataframe}
+all_long = Demographics_Wave4 %>% 
+  mutate(tagid = str_remove(tagid, "_")) %>% 
+  left_join(W4S2_dates) %>% 
+  full_join(dsr_long) 
+
+```
+
+Raw data were loaded from three sources -- daily self-report (DSR) data collected during the daily diary period, Wave 4 demographic information, and session dates used to calculate day-in-study. Variable names were standardized and datasets were merged by participant ID prior to cleaning.
+
+# Cleaning
+
+## Composite scores and creating variables
+
+### Daily mental health
+
+We create the psycho_mh variable for future analysis. This variable comprises the daily mental health items. We also create the mh_scores variable, comprising the daily mental health scores.
+
+```{r dsr-mh-scores}
+psycho_mh = all_long %>% 
+  select(starts_with("DSR_3")) %>% 
+  psych::alpha(check.keys = TRUE)
+
+psycho_mh_keys <- unlist(psycho_mh$keys)
+
+mh_keys = ifelse(psycho_mh_keys == -1, "-", "")
+mh_keys = paste0(mh_keys, names(psycho_mh_keys)) 
+
+mh_scores = all_long %>% 
+  select(starts_with("DSR_3")) %>% 
+  psych::scoreItems(keys = mh_keys, items = ., )
+
+all_long$dmh = mh_scores$scores[,1]
+
+#mean-centering scores
+all_long <- all_long %>%
+  mutate(across(starts_with("DSR_2"), ~ . - mean(., na.rm = TRUE), .names = "c_{.col}"),
+         across(starts_with("DSR_3"), ~ . - mean(., na.rm = TRUE), .names = "c_{.col}"),
+         across(starts_with("Q7"), ~ . - mean(., na.rm = TRUE), .names = "c_{.col}"))
+```
+
+Daily mental health items (DSR_3 variables) were scored using the psych package. Items were keyed based on the direction of their factor loadings, with negatively-keyed items reverse-scored prior to composite creation. All DSR_2 (friendship), DSR_3 (mental health), and Q7 (romantic relationship) variables were then grand-mean centered to facilitate within-person interpretation in subsequent multilevel models.
+
+### Daily friendship quality scores
+
+We create the psycho_friend variable for future analysis, which comprises the daily friendship features. We also create the friend_scores variable, comprising the daily friendship feature scores.
+
+```{r dsr-friend-scores}
+psycho_friend = all_long %>% 
+  select(starts_with("DSR_2")) %>% 
+  psych::alpha(check.keys = TRUE)
+
+psycho_friend_keys <- unlist(psycho_friend$keys) 
+
+friend_keys = ifelse(psycho_friend_keys == -1, "-", "")
+friend_keys = paste0(friend_keys, names(psycho_friend_keys))
+
+friend_scores = all_long %>% 
+  select(starts_with("DSR_2")) %>% 
+  psych::scoreItems(keys = friend_keys, items = ., )
+
+all_long$friend = friend_scores$scores[,1]
+
+```
+
+Daily friendship experience items (DSR_2 variables) were similarly scored and keyed. The resulting composite reflects the overall valence of participants' daily friendship experiences and is used in sensitivity analyses; primary analyses use individual items rather than this composite.
+
+### Daily romantic experience
+
+We create the psycho_romance variable for future analysis. This variable comprises the daily romantic relationship experience items. We also create the romance_scores variable, comprising the daily mental health scores.
+
+```{r dsr-romance-scores}
+psycho_romance = all_long %>% 
+  select(starts_with("Q7_")) %>% 
+  psych::alpha(check.keys = TRUE)
+
+psycho_romance_keys <- unlist(psycho_romance$keys) 
+
+romance_keys = ifelse(psycho_romance_keys == -1, "-", "")
+romance_keys = paste0(romance_keys, names(psycho_romance_keys))
+
+romance_scores = all_long %>% 
+  select(starts_with("Q7")) %>% 
+  psych::scoreItems(keys = romance_keys, items = ., )
+
+all_long$romance = romance_scores$scores[,1]
+
+```
+
+Daily romantic relationship experience items (Q7 variables) were scored using the same procedure. These items were only administered to participants who indicated they were currently in a romantic relationship. As noted in the main manuscript, 31 participants provided usable romantic relationship data and constitute the subsample for all romance-related sensitivity analyses.
+
+### Daily diary days
+
+Day-in-study was calculated as the number of days elapsed between Session 1 and the survey completion timestamp. To ensure one observation per person per day, duplicate entries on the same calendar day were resolved by retaining the first completed assessment. Entries were capped at 40 days to match the maximum intended diary period. Empty rows were inserted for days on which no diary entry was completed, preserving the temporal structure of the data for lag calculations.
+
+```{r days}
+all_long = all_long %>% 
+  mutate(across(c(w4s1date, w4s2date, EndDate), as_datetime)) %>% 
+  mutate(
+    day = difftime(EndDate,w4s1date, units = "days"),
+    day = round(day)) 
+
+# one entry per person per day
+all_long = all_long %>% 
+  count(tagid, day) %>% 
+  full_join(all_long) %>% 
+  filter(!is.na(day)) %>% 
+  group_by(tagid) %>% 
+  mutate(
+    day = case_when(
+      n > 1 & row_number() == 1 ~ as.numeric(day) - 1,
+      TRUE ~ as.numeric(day))) %>% 
+  group_by(tagid, day) %>% 
+  filter(row_number() == max(row_number())) %>% 
+  ungroup()
+
+# empty row for missing day
+all_long = expand_grid(
+  tagid = unique(all_long$tagid),
+  day = c(1:40)
+) %>% 
+  left_join(all_long)
+```
+
+```{r}
+all_long <- all_long %>%
+  mutate(
+    weekend = if_else(weekdays(as.Date(Date_Interview)) %in% c("Saturday", "Sunday"), 0, 1))
+```
+
+Days of participation for individuals in romantic relationships. 
+```{r romance-days}
+dsr_long %>% 
+  filter(Q9 == 1) %>%
+  count(tagid) %>% 
+  summarize(total_N = sum(n))
+
+```
+
+### Lags
+
+Lagged variables were created for all daily mental health, friendship, and romantic relationship items by shifting each participant's time series back one day within person. These lag variables serve as same-day autoregressive controls in all primary and supplementary models, allowing us to isolate same-day changes in affect beyond what would be expected based on the prior day's affect.
+
+```{r lag}
+
+all_long = all_long %>% 
+  group_by(tagid) %>% 
+  mutate(
+    across(c(friend, dmh),
+           lag, 
+           .names = "{.col}_lag")
+  )
+
+# calculate individual lag for each daily mental health variable
+all_long <- all_long %>%
+  group_by(tagid) %>%
+  mutate(across(starts_with("DSR_3"), lag, .names = "{.col}_lag"))
+
+# calculate individual lag for each daily friendship variable
+all_long <- all_long %>%
+  group_by(tagid) %>%
+  mutate(across(starts_with("DSR_2"), lag, .names = "{.col}_lag"))
+
+# calculate individual lag for each daily romantic variable
+all_long <- all_long %>%
+  group_by(tagid) %>%
+  mutate(across(starts_with("Q7_"), lag, .names = "{.col}_lag"))
+```
+
+### Participant age at time of interview
+
+Here we calculate the age of individuals at the time of their interview using their date of birth and the interview date.
+
+```{r age-function}
+#age
+source(here("scripts/zz_age-calc.R"))
+
+#format date of birth and date of interview
+all_long$Date_Interview <- as.Date(all_long$Date_Interview, format = "%Y-%m-%d")
+
+all_long$DOB <- as.Date(all_long$DOB, format = "%Y-%m-%d")
+
+all_long <- all_long %>%
+  filter(!is.na(DOB),
+         !is.na(Date_Interview))
+
+#calculate age at interview
+all_long$Age_W4S1 <- age_calc(all_long$DOB, 
+                                 enddate = all_long$Date_Interview, 
+                                 units = "years", precise = TRUE)
+
+```
+
+# Descriptive Statistics
+
+The descriptive statistics (Table \@ref(tab:descriptives-tab)) above summarizes sample characteristics at Wave 4. Demographic information was collected at Session 1 of each wave. Racial and ethnic categories were coded from self-report items that allowed participants to select multiple identities; multiracial categories therefore reflect participants who endorsed more than one racial group.
+
+```{r descriptives}
+#total number of participants in DSR
+length(unique(all_long$tagid))
+
+all_long_unique <- all_long %>%
+  distinct(tagid, .keep_all = TRUE)
+
+#total number of days
+dsr_long %>% count(tagid) %>% 
+  summarize(total_N = sum(n))
+
+#compute descriptive statistics
+summary_table <- data.frame(
+  Metric = c(
+    "Mean Age", "SD Age", "Range Age", 
+    "Proportion Female", "Proportion Male", "Proportion Non-Binary",
+    "Ethnicity", "White & Black", "White & Asian", "White & Native", 
+    "White & Other", "Proportion White", "Proportion Black", 
+    "Proportion Asian", "Proportion Native", "Proportion NHPI", "Proportion Other"
+  ),
+  Value = c(
+    round(mean(all_long_unique$Age_W4S1), 2),
+    round(sd(all_long_unique$Age_W4S1), 2),
+    paste0(round(min(all_long_unique$Age_W4S1), 2), "-", round(max(all_long_unique$Age_W4S1), 2)),
+    round(mean(all_long_unique$Gender == 2) * 100, 2),
+    round(mean(all_long_unique$Gender == 1) * 100, 2),
+    round(mean(all_long_unique$Gender == 3) * 100, 2),
+    round(mean(all_long_unique$Ethnicity == 1) * 100, 2),
+    round(mean(all_long_unique$Race_White == 2 & all_long_unique$Race_Black == 2) * 100, 2),
+    round(mean(all_long_unique$Race_White == 2 & all_long_unique$Race_Asian == 2) * 100, 2),
+    round(mean(all_long_unique$Race_White == 2 & all_long_unique$Race_NAAN == 2) * 100, 2),
+    round(mean(all_long_unique$Race_White == 2 & all_long_unique$Race_Other == 2) * 100, 2),
+    round(mean(all_long_unique$Race_White == 2 & 
+               all_long_unique$Race_Black == 1 & 
+               all_long_unique$Race_Asian == 1 & 
+               all_long_unique$Race_Other == 1 & 
+               all_long_unique$Race_NAAN == 1) * 100, 2),
+    round(mean(all_long_unique$Race_White == 1 & all_long_unique$Race_Black == 2) * 100, 2),
+    round(mean(all_long_unique$Race_White == 1 & all_long_unique$Race_Asian == 2) * 100, 2),
+    round(mean(all_long_unique$Race_White == 1 & all_long_unique$Race_NAAN == 2) * 100, 2),
+    round(mean(all_long_unique$Race_White == 1 & all_long_unique$Race_NHPI == 2) * 100, 2),
+    round(mean(all_long_unique$Race_White == 1 & all_long_unique$Race_Other == 2) * 100, 2)
+  )
+)
+
+# rename variables
+summary_table <- summary_table %>%
+  mutate(Metric = case_when(
+    Metric == "Mean Age" ~ "Average Age",
+    Metric == "Proportion Female" ~ "Percentage Female",
+    Metric == "Proportion Male" ~ "Percentage Male",
+    Metric == "Range Age" ~ "Age Range",
+    Metric == "Proportion Non-Binary" ~ "Percentage Non-Binary",
+    Metric == "White & Black" ~ "Percentage Multiracial White and Black",
+    Metric == "White & Asian" ~ "Percentage Multiracial White and Asian",
+    Metric == "White & Native" ~ "Percentage Multiracial White and Native",
+    Metric == "White & Other" ~ "Percentage Multiracial White and Other",
+    Metric == "Proportion White" ~ "Percentage White",
+    Metric == "Proportion Black" ~ "Percentage Black",
+    Metric == "Proportion Asian" ~ "Percentage Asian",
+    Metric == "Proportion Native" ~ "Percentage Native",
+    Metric == "Proportion NHPI" ~ "Percentage NHPI",
+    Metric == "Proportion Other" ~ "Percentage Other",
+    Metric == "Ethnicity" ~ "Hispanic/Latino",
+    TRUE ~ Metric
+  ))
+
+# reorder variables using a custom order
+custom_order <- c(
+  "Average Age", "SD Age", "Age Range", 
+  "Percentage Female", "Percentage Male", "Percentage Non-Binary", "Percentage White", "Percentage Black", "Percentage Asian", "Percentage Native", "Percentage NHPI", "Percentage Other", "Percentage Multiracial White and Black", "Percentage Multiracial White and Asian", "Percentage Multiracial White and Native", "Percentage Multiracial White and Other", "Hispanic/Latino")
+```
+
+```{r descriptives-tab}
+summary_table <- summary_table %>%
+  mutate(Metric = factor(Metric, levels = custom_order)) %>%
+  arrange(Metric)
+
+kable(summary_table, caption = "Descriptive Statistics", align = 'l') %>% 
+  kableExtra::kable_styling(latex_options = "scale_down") 
+
+```
+
+At the time these data were acquired (Wave 4), participants in this subsample were between 14.67 to 18.92 years (M = 16.67 years, SD = .90 years). Of these participants, although all were assigned female at birth, at the Wave 4 time point, 87.80% identified as female, 8.89% identified as non-binary, and 3.33% identified as male. Additionally, 76.70% were White, 5.55% were Black, 8.89% were Asian, 5.55% were Native American/Alaska Natives, and 6.66% categorized themselves as Other. Additionally, 14.40% of our participants identified as Hispanic/Latinx.
+
+```{r summary-stats-function}
+summary_stats <- function(df, column_name) {
+  # check if the column exists in the data frame
+  if (!column_name %in% colnames(df)) {
+    stop("The specified column does not exist in the data frame.")
+  }
+  
+  variable <- df[[column_name]]
+    if (!is.numeric(variable)) {
+    stop("The specified column must be numeric.")
+  }
+    mean_val <- mean(variable, na.rm = TRUE)
+  sd_val <- sd(variable, na.rm = TRUE)
+  range_val <- range(variable, na.rm = TRUE)
+    stats <- list(
+    mean = mean_val,
+    sd = sd_val,
+    range = range_val
+  )
+  
+  return(stats)
+}
+
+columns <- c("DSR_2_1", "DSR_2_2", "DSR_2_3", "DSR_2_4", "DSR_2_5", 
+             "DSR_2_6", "DSR_2_7", "DSR_2_8", "DSR_2_9", 
+             "DSR_3_1", "DSR_3_2", "DSR_3_3", "DSR_3_4", 
+             "DSR_3_5", "DSR_3_6", "DSR_3_7", "DSR_3_8")
+
+# create an empty data frame to store the results
+summary_table <- data.frame(
+  Column = character(),
+  Mean = numeric(),
+  SD = numeric(),
+  Range = character(),
+  stringsAsFactors = FALSE
+)
+
+for (col in columns) {
+  stats <- summary_stats(all_long, col)
+  summary_table <- rbind(summary_table, data.frame(
+    Column = col,
+    Mean = round(stats$mean, 2),
+    SD = round(stats$sd, 2),
+    Range = paste(round(stats$range, 2), collapse = " - ")
+  ))
+}
+
+kable(summary_table, caption = "Summary Statistics for DSR Variables", booktabs = T, longtable = T)
+
+```
+
+## Variability in Daily Friendship Quality
+
+In order to visualize the differences between participants for each of the friendship feature items, we created three plots that show how trusted, lonely, and jealous changes over days for each of the six selected participants. Each participant has their own subplot. Figures \@ref(fig:trusted-variability), \@ref(fig:lonely-variability), and \@ref(fig:jealous-variability), all depict this.
+
+IN MAIN MANUSCRIPT
+
+```{r trusted-variability, fig.cap = "Examples of daily responses to the question “How trusted did you feel in your [best] friendship in the past day?” Participants were chosen to illustrate different patterns of daily response, including different average levels and different variability.", fig.width=6, fig.height=4}
+#trusted
+custom_titles <- c(
+  "TAG026" = "TAG605",
+  "TAG067" = "TAG612",
+  "TAG001" = "TAG678",
+  "TAG127" = "TAG634",
+  "TAG032" = "TAG629",
+  "TAG190" = "TAG690"
+)
+
+dsr_long %>% 
+  filter(tagid %in% c("TAG026", "TAG067", "TAG001", "TAG127", "TAG032", "TAG190")) %>% 
+  group_by(tagid) %>% 
+  mutate(day = row_number()) %>% 
+  ggplot(aes(x = day, y = DSR_2_6)) +
+  geom_point(color = "black") +
+  geom_line(color = "black") +
+  facet_wrap(~tagid, labeller = as_labeller(custom_titles)) +
+  labs(
+    title = "Felt Trusted",
+    y = "Participant Response"
+  )+
+  theme_apa() +
+  theme(
+    panel.background = element_rect(fill = 'transparent'),
+    plot.background = element_rect(fill = 'transparent', color = NA),
+    strip.text.x = element_text(size = 12, color = "black", family = "Times New Roman"),
+    axis.text = element_text(size = 12, family = "Times New Roman"),
+    text = element_text(size = 12, family = "Times New Roman")
+  )
+```
+
+```{r lonely-variability, fig.cap = "Examples of daily responses to the question “How lonely did you feel in your [best] friendship in the past day?”Participants were chosen to illustrate different patterns of daily response, including different average levels and different variability.", fig.width=6, fig.height=4}
+
+custom_titles_2 <- c(
+  "TAG026" = "TAG605",
+  "TAG067" = "TAG612",
+  "TAG001" = "TAG678",
+  "TAG127" = "TAG634",
+  "TAG032" = "TAG629",
+  "TAG190" = "TAG690"
+)
+
+dsr_long %>% 
+  filter(tagid %in% c("TAG026", "TAG067", "TAG001", "TAG127", "TAG032", "TAG190")) %>% 
+  group_by(tagid) %>% 
+  mutate(day = row_number()) %>% 
+  ggplot(aes(x = day, y = DSR_2_3)) +
+  geom_point(color = "black" ) +
+  geom_line(color = "black") +
+  facet_wrap(~tagid, labeller = as_labeller(custom_titles_2)) +
+  labs(
+    title = "Felt Lonely",
+    y = "Participant Response"
+  )+
+  theme_apa()+
+ theme(
+    panel.background = element_rect(fill = 'transparent'),
+    plot.background = element_rect(fill = 'transparent', color = NA),
+    strip.text.x = element_text(size = 12, color = "black", family = "Times New Roman"),
+    axis.text = element_text(size = 12, family = "Times New Roman"),
+    text = element_text(size = 12, family = "Times New Roman")
+  )
+```
+
+```{r jealous-variability, fig.cap= "Examples of daily responses to the question “How jealous did you feel in your [best] friendship in the past day?” Participants were chosen to illustrate different patterns of daily response, including different average levels and different variability.", fig.width=6, fig.height=4}
+#jealous
+custom_titles_3 <- c(
+  "TAG026" = "TAG605",
+  "TAG067" = "TAG612",
+  "TAG001" = "TAG678",
+  "TAG127" = "TAG634",
+  "TAG032" = "TAG629",
+  "TAG190" = "TAG690"
+)
+
+dsr_long %>% 
+  filter(tagid %in% c("TAG026", "TAG067", "TAG001", "TAG127", "TAG032", "TAG190")) %>% 
+  group_by(tagid) %>% 
+  mutate(day = row_number()) %>% 
+  ggplot(aes(x = day, y = DSR_2_5)) +
+  geom_point(color = "black" ) +
+  geom_line(color = "black") +
+  facet_wrap(~tagid, labeller = as_labeller(custom_titles_3)) +
+  labs(x = "Day", y = "Did not feel Jealous")+
+  theme_apa()+
+  theme(
+    panel.background = element_rect(fill = 'transparent'),
+    plot.background = element_rect(fill = 'transparent', color = NA),
+    strip.text.x = element_text(size = 12, color = "black", family = "Times New Roman"),
+    axis.text = element_text(size = 12, family = "Times New Roman"),
+    text = element_text(size = 12, family = "Times New Roman")
+  )
+```
+
+## Variability in Daily Romantic Relationship Experience
+
+In order to visualize the differences between participants for each of the romantic feature items, we created three plots that show how trusted, lonely, and jealous changes over days for each of the six selected participants. Each participant has their own subplot. Figures \@ref(fig:trusted-romance), \@ref(fig:lonely-romance), and \@ref(fig:jealous-romance), all depict this.
+
+IN MAIN MANUSCRIPT
+
+```{r ttrusted-romance, fig.cap = "Examples of daily responses to the question “For the following list of items, rate how much you felt each item yesterday in your romantic and/or intimate relationship.” Participants were chosen to illustrate different patterns of daily response, including different average levels and different variability..", fig.width=6, fig.height=4}
+#trusted
+custom_titles <- c(
+  "TAG026" = "TAG605",
+  "TAG067" = "TAG612",
+  "TAG001" = "TAG678",
+  "TAG127" = "TAG634",
+  "TAG032" = "TAG629",
+  "TAG190" = "TAG690"
+)
+
+dsr_long %>% 
+  filter(tagid %in% c("TAG026", "TAG067", "TAG001", "TAG127", "TAG032", "TAG190")) %>% 
+  group_by(tagid) %>% 
+  mutate(day = row_number()) %>% 
+  ggplot(aes(x = day, y = Q7_6)) +
+  geom_point(color = "black") +
+  geom_line(color = "black") +
+  facet_wrap(~tagid, labeller = as_labeller(custom_titles)) +
+  labs(
+    title = "Felt Trusted",
+    y = "Participant Response"
+  )+
+  theme_apa() +
+  theme(
+    panel.background = element_rect(fill = 'transparent'),
+    plot.background = element_rect(fill = 'transparent', color = NA),
+    strip.text.x = element_text(size = 12, color = "black", family = "Times New Roman"),
+    axis.text = element_text(size = 12, family = "Times New Roman"),
+    text = element_text(size = 12, family = "Times New Roman")
+  )
+```
+
+```{r lonely-romance, fig.cap = "Examples of daily responses to the question “For the following list of items, rate how much you felt each item yesterday in your romantic and/or intimate relationship.” Participants were chosen to illustrate different patterns of daily response, including different average levels and different variability.", fig.width=6, fig.height=4}
+
+custom_titles_2 <- c(
+  "TAG026" = "TAG605",
+  "TAG067" = "TAG612",
+  "TAG001" = "TAG678",
+  "TAG127" = "TAG634",
+  "TAG032" = "TAG629",
+  "TAG190" = "TAG690"
+)
+
+dsr_long %>% 
+  filter(tagid %in% c("TAG026", "TAG067", "TAG001", "TAG127", "TAG032", "TAG190")) %>% 
+  group_by(tagid) %>% 
+  mutate(day = row_number()) %>% 
+  ggplot(aes(x = day, y = Q7_3)) +
+  geom_point(color = "black" ) +
+  geom_line(color = "black") +
+  facet_wrap(~tagid, labeller = as_labeller(custom_titles_2)) +
+  labs(
+    title = "Felt Lonely",
+    y = "Participant Response"
+  )+
+  theme_apa()+
+ theme(
+    panel.background = element_rect(fill = 'transparent'),
+    plot.background = element_rect(fill = 'transparent', color = NA),
+    strip.text.x = element_text(size = 12, color = "black", family = "Times New Roman"),
+    axis.text = element_text(size = 12, family = "Times New Roman"),
+    text = element_text(size = 12, family = "Times New Roman")
+  )
+```
+
+```{r jealous-romance, fig.cap = "Examples of daily responses to the question “For the following list of items, rate how much you felt each item yesterday in your romantic and/or intimate relationship.” Participants were chosen to illustrate different patterns of daily response, including different average levels and different variability.", fig.width=6, fig.height=4}
+#jealous
+custom_titles_3 <- c(
+  "TAG026" = "TAG605",
+  "TAG067" = "TAG612",
+  "TAG001" = "TAG678",
+  "TAG127" = "TAG634",
+  "TAG032" = "TAG629",
+  "TAG190" = "TAG690"
+)
+
+dsr_long %>% 
+  filter(tagid %in% c("TAG026", "TAG067", "TAG001", "TAG127", "TAG032", "TAG190")) %>% 
+  group_by(tagid) %>% 
+  mutate(day = row_number()) %>% 
+  ggplot(aes(x = day, y = Q7_5)) +
+  geom_point(color = "black" ) +
+  geom_line(color = "black") +
+  facet_wrap(~tagid, labeller = as_labeller(custom_titles_3)) +
+  labs(x = "Day", y = "Did not feel Jealous")+
+  theme_apa()+
+   theme(
+    panel.background = element_rect(fill = 'transparent'),
+    plot.background = element_rect(fill = 'transparent', color = NA),
+    strip.text.x = element_text(size = 12, color = "black", family = "Times New Roman"),
+    axis.text = element_text(size = 12, family = "Times New Roman"),
+    text = element_text(size = 12, family = "Times New Roman")
+  )
+```
+
+## Variability in Daily Mental Health
+
+In order to visualize the differences between participants for each of the daily mental health feature items, we created two plots that show how feelings of depression and happiness change over days for each of the six selected participants. Each participant has their own subplot. Figures \@ref(fig:depression-variability) and \@ref(fig:happiness-variability) depict this.
+
+IN MAIN MANUSCRIPT
+
+```{r depression-variability, fig.cap= "Examples of daily responses to the questions “How depressed did you feel in the past day?”Participants were chosen to illustrate different patterns of daily response, including different average levels and different variability.", fig.width=6, fig.height=4}
+
+dsr_long %>% 
+  filter(tagid %in% c("TAG210","TAG225",
+                    "TAG113", "TAG026",
+                    "TAG190", "TAG119")) %>% 
+  group_by(tagid) %>% 
+  mutate(day = row_number()) %>% 
+  ggplot(aes(x = day, y = DSR_3_1)) +
+  geom_point(color = "black" ) +
+  geom_line(color = "black") +
+  facet_wrap(~tagid, labeller = as_labeller(custom_titles_3)) +
+  labs(x = "Day", y = "Felt depressed")+
+  theme_apa()+
+   theme(
+    panel.background = element_rect(fill = 'transparent'),
+    plot.background = element_rect(fill = 'transparent', color = NA),
+    strip.text.x = element_text(size = 12, color = "black", family = "Times New Roman"),
+    axis.text = element_text(size = 12, family = "Times New Roman"),
+    text = element_text(size = 12, family = "Times New Roman")
+  )
+```
+
+```{r happiness-variability, "Examples of daily responses to the questions “How happy did you feel in the past day?”Participants were chosen to illustrate different patterns of daily response, including different average levels and different variability.", fig.width=6, fig.height=4}
+
+custom_titles_4 <- c(
+  "TAG027" = "TAG667",
+  "TAG225" = "TAG699",
+  "TAG113" = "TAG634",
+  "TAG119" = "TAG690",
+  "TAG190" = "TAG629",
+  "TAG210" = "TAG678"
+)
+
+dsr_long %>% 
+  filter(tagid %in% c("TAG210","TAG225",
+                    "TAG113", "TAG027",
+                    "TAG190", "TAG119")) %>% 
+  group_by(tagid) %>% 
+  mutate(day = row_number()) %>% 
+  ggplot(aes(x = day, y = DSR_3_6)) +
+  geom_point(color = "black" ) +
+  geom_line(color = "black") +
+  facet_wrap(~tagid, labeller = as_labeller(custom_titles_4)) +
+  labs(x = "Day", y = "Felt happy")+
+  theme_apa()+
+   theme(
+    panel.background = element_rect(fill = 'transparent'),
+    plot.background = element_rect(fill = 'transparent', color = NA),
+    strip.text.x = element_text(size = 12, color = "black", family = "Times New Roman"),
+    axis.text = element_text(size = 12, family = "Times New Roman"),
+    text = element_text(size = 12, family = "Times New Roman")
+  )
+```
+
+## Variability in Daily Friendship Experience vs Daily Romantic Experience
+
+In order to visualize the differences between participants and the differences between romantic and friendship experiences, we created plots that show how feeling trusted or feeling lonely change over days for each of the six selected participants in both their friendships and romantic relationships. Each participant has their own subplot.
+
+```{r compare-romance-friendship-trusted, fig.width=6, fig.height=4}
+custom_titles <- c(
+  "TAG026" = "TAG605",
+  "TAG067" = "TAG612",
+  "TAG001" = "TAG678",
+  "TAG127" = "TAG634",
+  "TAG032" = "TAG629",
+  "TAG190" = "TAG690"
+)
+
+dsr_long %>% 
+  filter(tagid %in% names(custom_titles)) %>% 
+  group_by(tagid) %>% 
+  mutate(day = row_number()) %>% 
+  ungroup() %>% 
+  pivot_longer(
+    cols = c(Q7_6, DSR_2_6),
+    names_to = "context",
+    values_to = "value"
+  ) %>%
+  mutate(
+    context = recode(context,
+                     Q7_6 = "Romantic",
+                     DSR_2_6 = "Friendship"),
+    context = factor(context, levels = c("Romantic", "Friendship"))
+  ) %>%
+  ggplot(aes(x = day, y = value, color = context, group = context)) +
+  geom_line(linewidth = 0.9, alpha = 0.9) +
+  geom_point(size = 1.8, alpha = 0.9) +
+  facet_wrap(~tagid, labeller = as_labeller(custom_titles)) +
+  labs(
+    title = "Felt Trusted",
+    x = "day",
+    y = "Participant Response",
+    color = NULL
+  ) +
+  scale_color_manual(values = c("Romantic" = "black",
+                                "Friendship" = "gray50")) +
+  theme_apa() +
+  theme(
+    panel.background = element_rect(fill = 'transparent'),
+    plot.background = element_rect(fill = 'transparent', color = NA),
+    strip.text.x = element_text(size = 12, color = "black", family = "Times New Roman"),
+    axis.text = element_text(size = 12, family = "Times New Roman"),
+    text = element_text(size = 12, family = "Times New Roman"),
+    legend.position = "top"
+  )
+```
+
+```{r compare-romance-friendship-lonely, fig.width=6, fig.height=4}
+custom_titles <- c(
+  "TAG026" = "TAG605",
+  "TAG067" = "TAG612",
+  "TAG001" = "TAG678",
+  "TAG127" = "TAG634",
+  "TAG032" = "TAG629",
+  "TAG190" = "TAG690"
+)
+
+dsr_long %>% 
+  filter(tagid %in% names(custom_titles)) %>% 
+  group_by(tagid) %>% 
+  mutate(day = row_number()) %>% 
+  ungroup() %>% 
+  pivot_longer(
+    cols = c(Q7_3, DSR_2_3),
+    names_to = "context",
+    values_to = "value"
+  ) %>%
+  mutate(
+    context = recode(context,
+                     Q7_3 = "Romantic",
+                     DSR_2_3 = "Friendship"),
+    context = factor(context, levels = c("Romantic", "Friendship"))
+  ) %>%
+  ggplot(aes(x = day, y = value, color = context, group = context)) +
+  geom_line(linewidth = 0.9, alpha = 0.9) +
+  geom_point(size = 1.8, alpha = 0.9) +
+  facet_wrap(~tagid, labeller = as_labeller(custom_titles)) +
+  labs(
+    title = "Felt Lonely",
+    x = "day",
+    y = "Participant Response",
+    color = NULL
+  ) +
+  scale_color_manual(values = c("Romantic" = "black",
+                                "Friendship" = "gray50")) +
+  theme_apa() +
+  theme(
+    panel.background = element_rect(fill = 'transparent'),
+    plot.background = element_rect(fill = 'transparent', color = NA),
+    strip.text.x = element_text(size = 12, color = "black", family = "Times New Roman"),
+    axis.text = element_text(size = 12, family = "Times New Roman"),
+    text = element_text(size = 12, family = "Times New Roman"),
+    legend.position = "top"
+  )
+```
+
+## Daily Diary Participation
+
+We created a graph to depict the participation of the adolescents in the daily diary survey. In Figure \@ref(fig:daily-diary-days) each row is a different participant, and the filled in black are the days they filled the daily diary out. IN MAIN MANUSCRIPT
+
+```{r daily-diary-days, fig.cap = "Daily participation of each adolescent in the study. Participants are ordered by the total number of days the daily diary was completed.", fig.width=6, fig.height=4}
+dsr_long %>% 
+  mutate(StartDate = as.Date(StartDate)) %>% 
+  group_by(tagid) %>% 
+  mutate(firstday = min(StartDate),
+         time_since_last = StartDate - dplyr::lag(StartDate),
+         day = StartDate - firstday + 1) %>% 
+  filter(day <= 41) %>% 
+  filter(time_since_last < 2) %>% 
+  select(tagid, time_since_last, day) %>% 
+  mutate(completed = 1,
+         n = sum(completed)) %>% 
+  ggplot(aes(x = reorder(tagid, n), y = day, fill = completed)) +
+  geom_tile(fill = "#303236" ) +
+  scale_x_discrete(breaks = NULL) +
+  labs(x = "Participant ID", y = "Day")+
+  coord_flip() +
+  guides(fill = "none")+
+  theme_apa()+
+  theme(panel.background = element_rect(fill='transparent'), plot.background = element_rect(fill='transparent', color=NA))
+```
+
+## Attrition
+
+To assess whether study attrition introduced systematic bias, we compared participants who remained in the study through Wave 4 (N = 110) with those who had dropped out since Wave 1 (N = 64) on a range of demographic and socioeconomic characteristics assessed at Wave 1. As shown in the table above, no significant differences emerged between retained and dropped participants on gender identity, racial or ethnic identity, household income, free lunch enrollment, parental education, or spousal education. These findings suggest that attrition was largely non-systematic with respect to the demographic variables available at Wave 1.
+
+```{r attrition, fig.cap = "Comparing demographics between participants at Wave 4 and participants who dropped out before Wave 4."}
+# Load demographic data
+demo_w1 <- import(here("data/Demographics_Wave1.xlsx"))
+demo_w4 <- import(here("data/Demographics_Wave4.xlsx"))
+
+demo_w1 <- demo_w1 %>% mutate(tagid = toupper(gsub("[-_]", "", tagid)))
+demo_w4 <- demo_w4 %>% mutate(tagid = toupper(gsub("[-_]", "", tagid)))
+
+demo_w1 <- demo_w1 %>%
+  mutate(status = ifelse(tagid %in% demo_w4$tagid, "Stayed", "Dropped"))
+
+# Clean gender and race into readable variables
+demo_w1 <- demo_w1 %>%
+  mutate(
+    Gender_Cat = case_when(
+      Gender == 2 ~ "Female",
+      Gender == 3 ~ "Non-Binary",
+      Gender == 1 ~ "Male",
+      TRUE ~ NA_character_
+    ),
+    Race_Cat = case_when(
+      Race_Black == 2 ~ "Black",
+      Race_Black != 2 ~ "Non-Black"
+    ),
+    White_Cat = case_when(
+      Race_White == 2 ~ "White",
+      Race_White != 2 ~ "Non-White"
+    ),
+    Asian_Cat = case_when(
+      Race_Asian == 2 ~ "Asian",
+      Race_Asian != 2 ~ "Non-Asian"
+    ),
+    Ethnicity_Cat = case_when(
+     Ethnicity == 1 ~ "Hispanic/Latinx",
+      TRUE ~ "Not Hispanic/Latinx"
+    )
+  )
+
+# Helper: significance flag generator
+get_sig <- function(var) {
+  if (!var %in% colnames(demo_w1)) return("")
+  temp <- demo_w1 %>% select(status, !!sym(var)) %>%
+    filter(!.data[[var]] %in% c("Decline to Respond", "Don't Know")) %>%
+    drop_na()
+  if (nrow(temp) == 0) return("")
+  tbl <- table(temp$status, temp[[var]])
+  p <- tryCatch(chisq.test(tbl)$p.value, error = function(e) NA)
+  if (is.na(p)) return("")
+  if (p < .001) return("***")
+  if (p < .01) return("**")
+  if (p < .05) return("*")
+  return("")
+}
+
+# Categorical tabyl generator
+make_tab <- function(data, var, label) {
+  sig <- get_sig(var)
+  data %>%
+    filter(!.data[[var]] %in% c("Decline to Respond", "Don't Know")) %>%
+    tabyl(.data[[var]], status) %>%
+    adorn_percentages("col") %>%
+    adorn_pct_formatting(1) %>%
+    rename(Category = 1) %>%
+    mutate(Variable = label, Block = paste0(label, sig))
+}
+
+# Demographic tables
+gender_tab <- make_tab(demo_w1, "Gender_Cat", "Gender")
+ethnicity_tab <- make_tab(demo_w1, "Ethnicity_Cat", "Ethnicity")
+race_tab <- make_tab(demo_w1, "Race_Cat", "Race (Black)")
+asian_tab <- make_tab(demo_w1, "Asian_Cat", "Race (Asian)")
+white_tab <- make_tab(demo_w1, "White_Cat", "Race (White)")
+
+# Load SES data
+ses_w1 <- read.csv(here("data/SES_Wave1.csv"))
+ses_w4 <- read.csv(here("data/SES_Wave4.csv"))
+ses_w1$status <- ifelse(ses_w1$tagid %in% ses_w4$tagid, "Stayed", "Dropped")
+
+# SES categorical summary function with filtering
+ses_cat_summary <- function(var, var_label) {
+  sig_flag <- get_sig(var)
+  ses_w1 %>%
+    filter(!is.na(.data[[var]]), !.data[[var]] %in% c("Decline to Respond", "Don't Know")) %>%
+    tabyl(.data[[var]], status) %>%
+    adorn_percentages("col") %>%
+    adorn_pct_formatting(1) %>%
+    rename(Category = 1) %>%
+    mutate(Variable = var_label, Block = paste0(var_label, sig_flag))
+}
+
+income_tab <- ses_cat_summary("income_cat", "Income")
+p_edu_tab <- ses_cat_summary("p_edu_cat", "Parent Education")
+spouse_edu_tab <- ses_cat_summary("spouse_edu_cat", "Spouse Education")
+
+# SES continuous summary
+ses_num_summary <- ses_w1 %>%
+  group_by(status) %>%
+  summarise(
+    Mean_Free_Lunch = round(mean(Free_Lunch, na.rm = TRUE), 2),
+    SD_Free_Lunch = round(sd(Free_Lunch, na.rm = TRUE), 2),
+    Mean_Income = round(mean(Income, na.rm = TRUE), 2),
+    SD_Income = round(sd(Income, na.rm = TRUE), 2),
+    .groups = "drop"
+  ) %>%
+  pivot_longer(-status, names_to = "Category", values_to = "Value") %>%
+  pivot_wider(names_from = status, values_from = Value) %>%
+  mutate(
+    Variable = "Continuous SES",
+    Block = "Continuous SES",
+    Dropped = as.character(Dropped),
+    Stayed = as.character(Stayed)
+  )
+
+# Combine all tables
+combined_table <- bind_rows(
+  gender_tab,
+  ethnicity_tab,
+  race_tab,
+  asian_tab,
+  white_tab,
+  income_tab,
+  p_edu_tab,
+  spouse_edu_tab
+) %>%
+  select(Variable, Category, Dropped, Stayed)
+
+# Append continuous
+combined_final <- bind_rows(
+  combined_table,
+  ses_num_summary %>% select(Variable, Category, Dropped, Stayed)
+)
+
+# Print final APA-style table
+combined_final %>%
+  kbl(
+    caption = "Table: Comparison of Demographic and SES Variables by Retention Status",
+    col.names = c( "Variable", "Category", "Dropped", "Stayed"),
+    align = "llccc",
+    format = "latex"
+  ) %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "condensed", "hover")) %>%
+  collapse_rows(columns = 1:2, valign = "top") %>%
+  row_spec(0, bold = TRUE)
+
+```
+
+## ICCs
+
+Intraclass correlations (ICCs) were calculated for all daily diary variables using random-intercept models with no covariates. ICCs represent the proportion of total variance attributable to stable between-person differences, with the remainder reflecting within-person day-to-day variability. These values are reported in Table 1 of the main manuscript and inform interpretation of the multilevel models.
+
+```{r}
+dsr2_vars <- dsr_long %>% select(starts_with("DSR_2_")) %>% names()
+dsr3_vars <- dsr_long %>% select(starts_with("DSR_3_")) %>% names()
+
+dsr_long %>% 
+  select(tagid, all_of(dsr2_vars)) %>% 
+  pivot_longer(-c(tagid)) %>% 
+  group_by(name) %>% 
+  nest() %>% 
+  mutate(
+    model = map(data, ~lmer(value ~ 1 + (1|tagid), data =.)),
+    varcomp = map(model, VarCorr),
+    between = map_dbl(varcomp, 1),
+    within = map_dbl(varcomp, ~attr(., "sc")),
+    within = within^2,
+    icc = between / (between+within)
+  ) %>% 
+  select(name, between, within, icc)
+
+dsr_long %>% 
+  select(tagid, all_of(dsr3_vars)) %>% 
+  pivot_longer(-c(tagid)) %>% 
+  group_by(name) %>% 
+  nest() %>% 
+  mutate(
+    model = map(data, ~lmer(value ~ 1 + (1|tagid), data =.)),
+    varcomp = map(model, VarCorr),
+    between = map_dbl(varcomp, 1),
+    within = map_dbl(varcomp, ~attr(., "sc")),
+    within = within^2,
+    icc = between / (between+within)
+  ) %>% 
+  select(name, between, within, icc)
+```
+
+# Analyses
+
+## Correlations
+
+Correlation matrices for the daily friendship experience items and daily affective state items are presented above. Items within each scale showed moderate to strong positive intercorrelations, consistent with the view that these items tap related but distinct aspects of daily experience. The cross-scale correlation plot illustrates the range of associations between friendship and mental health items at the person-mean level, providing context for the within-person multilevel analyses that follow.
+
+```{r correlations}
+cor_dsr_friend <- dsr_long %>% 
+  select(starts_with("DSR_2")) %>% 
+  corx(triangle = "lower",
+       stars    = c(0.05, 0.01, 0.001),
+       describe = c(M = mean, SD = sd))
+
+cor_dsr_dmh <- dsr_long %>% 
+  select(starts_with("DSR_3")) %>% 
+  corx(triangle = "lower",
+       stars    = c(0.05, 0.01, 0.001),
+       describe = c(M = mean, SD = sd))
+
+# Define new names for the DSR_2_* variables
+friend_names <- c(
+  "Supported",
+  "Rejected",
+  "Lonely",
+  "Secure",
+  "Jealous",
+  "Trusted",
+  "Valued",
+  "Stressed",
+  "Understood"
+)
+
+dmh_names <- c(
+  "Depressed",
+  "Anxious",
+  "Sleepy",
+  "Self-confident",
+  "Stressed",
+  "Happy",
+  "Joyful",
+  "Excited"
+)
+
+#rename the rows and columns in the table
+rownames(cor_dsr_dmh$apa) <- dmh_names
+
+#rename the rows and columns in the table
+rownames(cor_dsr_friend$apa) <- friend_names
+```
+
+```{r correlation-friend-tab}
+apa_table(cor_dsr_friend$apa, 
+          caption = "Daily friendship features correlation matrix",
+          note    = "* p < 0.05; ** p < 0.01; *** p < 0.001")
+```
+
+```{r correlation-dmh-tab}
+apa_table(cor_dsr_dmh$apa, 
+          caption = "Daily mental health correlation matrix",
+          note    = "* p < 0.05; ** p < 0.01; *** p < 0.001")
+```
+
+We also calculated the correlations between the 9 items in the daily friendship features scale and the 8 items in the daily mental health scale Figure \@ref(fig:correlation-coeff-plot) illustrates depicts a scatter plot of correlation coefficients (r) along with their confidence intervals for each pair of variables analyzed. The spread of points and the overlapping confidence intervals highlight the variability in the strength and direction of correlations between the variables in the items on the two scales
+
+```{r correlation-coeff, results='hide'}
+avg_DSR2 <- all_long %>%
+  select(tagid, starts_with("DSR_2_") & !ends_with("_lag")) %>%
+  group_by(tagid) %>% 
+  summarise(across(everything(), mean, na.rm = TRUE)) %>% 
+  arrange(tagid) %>% 
+  select(-tagid)
+
+avg_DSR3 <- all_long %>%
+  select(tagid, starts_with("DSR_3_") & !ends_with("_lag")) %>%
+  group_by(tagid) %>% 
+  summarise(across(everything(), mean, na.rm = TRUE)) %>% 
+  arrange(tagid) %>% 
+  select(-tagid)
+
+cor_results = corr.test(x=avg_DSR2, y=avg_DSR3)
+
+cor_results_df <- print(cor_results, short = F)
+
+```
+
+```{r correlation-coeff-plot, fig.cap = "Correlation Coefficients with Confidence Intervals"}
+
+ggplot(cor_results_df, aes(x = seq_along(raw.r), y = raw.r)) +
+  geom_errorbar(aes(ymin = raw.lower, ymax = raw.upper), width = 0.2, color = "#b8b8b8") +
+  geom_point() +
+  labs(x = "Index", y = "Correlation Coefficient (r)", title = "Correlation Coefficients with Confidence Intervals") +
+  theme_bw()
+
+```
+
+## Model 1: Daily mental health and daily friendship quality (no lag)
+
+Model 1 presents associations between each daily friendship experience and each daily affective state without controlling for prior-day affect. These results are provided for reference and to illustrate the added value of the lagged specification. As expected, associations are generally larger in magnitude when the autoregressive control is omitted, underscoring the importance of accounting for prior-day affect when estimating same-day links between friendship experiences and emotional states.
+
+```{r}
+friend_quality_labels = c("supported", "rejected", "lonely", "secure", "jealous", "trusted", "valued", "stressed", "understood")
+names(friend_quality_labels) = all_long %>% 
+  ungroup() %>%
+  select(starts_with("DSR_2_") & !ends_with("_lag")) %>% 
+  names()
+
+mh_labels = c("depressed", "anxious", "sleepy", "self-confident", "stressed", "happy", "joyful", "excited")
+names(mh_labels) = all_long %>% 
+  ungroup() %>%
+  select(starts_with("DSR_3_") & !ends_with("_lag")) %>% 
+  names()
+
+romance_quality_labels = c("supported", "rejected", "lonely", "secure", "jealous", "trusted", "valued", "stressed", "understood", "loved")
+names(romance_quality_labels) = all_long %>% 
+  ungroup() %>%
+  select(starts_with("Q7_") & !ends_with("_lag")) %>% 
+  names()
+
+```
+
+To estimate the association of daily friendship features on daily mental health, we use a multilevel model with varying slopes (fixed intercepts) and items nested within person. Responses are standardized.
+
+First we reshape the data, converting the wide-format columns for daily friendship features into long format. Next we pivot the data again, converting the daily mental health variables from wide to long format. Next we adjust the scoring for certain daily mental health variables (negative features) by reversing their values (100-daily score). Next we group the data by the friendship feature variable as well as the daily mental health variable. Each combination of friendship feature item and daily mental health item has its own subset of data stored in the newly formed data column.
+
+Next we fit a linear mixed-effects model for each nested group. We predict the daily mental health scores based on daily friendship feature score and an intercept. We also add random intercepts and slopes for the daily friendship feature score at the person level. Figure \@ref(fig:model-no-lag-graph) visualizes this output for each combination of daily mental health and friendship quality variables
+
+```{r model-no-lag}
+long_models = all_long %>% 
+  pivot_longer(
+    cols = starts_with("DSR_2") & !ends_with("_lag"),
+    names_to = "friend_quality",
+    values_to = "friend_score", 
+    values_drop_na = T
+  ) %>% 
+  pivot_longer(
+    cols = starts_with("DSR_3") & !ends_with("_lag") ,
+    names_to = "daily_mh_var",
+    values_to = "daily_score", 
+    values_drop_na = T
+  ) %>% 
+  group_by(friend_quality, daily_mh_var) %>% 
+  nest() %>% 
+  mutate(
+    model = map(data, 
+                ~lmer(daily_score ~ friend_score + weekend + day + 1 + (1 + friend_score |tagid), data = .)),
+    summary = map(model, broom::tidy, conf.int = T)
+  )
+```
+
+```{r model-no-lag-graph, fig.cap = "Association between each daily mental health feature and each daily friendship experience for participants' single closest friend, not accounting for the previous day's mental health.", fig.height=8}
+long_models %>% 
+  select(-data, -model) %>% 
+  unnest(cols = summary) %>% 
+  filter(term == "friend_score") %>% 
+  select(-effect, -group, -term) %>% 
+  mutate(
+    daily_mh_var = recode(daily_mh_var, !!!mh_labels),
+    friend_quality = recode(friend_quality, !!!friend_quality_labels)
+  ) %>% 
+  mutate(
+    sig = case_when(
+      conf.low > 0 ~ "yes pos",
+      conf.high < 0 ~ "yes neg",
+      TRUE ~ "no"
+    )
+  ) %>% 
+  ggplot(aes(x = reorder(friend_quality, estimate), y = estimate, fill = sig)) +
+  geom_bar(stat = "identity") +
+  geom_errorbar(aes(ymin = conf.low, ymax=conf.high), width = .5) +
+  coord_flip() +
+  scale_fill_manual(values = c("#D3C5CA", "#DD6E42", "#99C5B5")) +
+  guides(fill = "none") +
+  facet_wrap(~daily_mh_var)
+
+```
+
+## Model 2: With lag
+
+Model 2 introduces the prior day's affect as a covariate, effectively estimating the association between same-day friendship experience and change in affect from the prior day. This specification is consistent with the primary models reported in the main manuscript. Results without FDR correction are shown here for transparency; the FDR-corrected version reported in Model 3 constitutes the primary analyses.
+
+```{r mh-outcome}
+long_models_lag_mh <- all_long %>%
+  pivot_longer(
+    cols = starts_with("DSR_2") & !ends_with("_lag"),
+    names_to = "friend_quality",
+    values_to = "friend_score",
+    values_drop_na = TRUE
+  ) %>%
+  pivot_longer(
+    cols = starts_with("DSR_3"),
+    names_to = "daily_mh_var",
+    values_to = "daily_score",
+    values_drop_na = TRUE
+  ) %>% 
+  mutate(
+    dmh_lag_var = ifelse(str_detect(daily_mh_var, "lag"), "lag_score", "daily_score"),
+    daily_mh_var = str_remove(daily_mh_var, "_lag")
+  ) %>% 
+  pivot_wider(names_from = dmh_lag_var, values_from = daily_score) %>% 
+  group_by(friend_quality, daily_mh_var) %>% 
+  nest() %>%
+  mutate(
+    model = map(data, 
+                ~lmer(daily_score ~ friend_score + lag_score + weekend + day + 1 + (1 + friend_score | tagid), data = .)),
+    summary = map(model, broom::tidy, conf.int = TRUE)
+  )
+```
+
+```{r mh-outcome-tab, results="asis"}
+long_models_lag_mh %>% 
+  ungroup() %>% 
+  select(-data, -model) %>% 
+  unnest(cols = summary) %>% 
+  filter(term == "friend_score") %>% 
+  arrange(daily_mh_var, friend_quality) %>% 
+  select(-effect, -group, -term) %>% 
+  mutate(
+    friend_quality = recode(friend_quality, !!!friend_quality_labels),
+    daily_mh_var = recode(daily_mh_var, !!!mh_labels),
+    across(where(is.numeric) & !contains("p.value"), ~ round(.x, 2)),
+    p.value = ifelse(p.value < 0.05, 
+                     sub("^0", "", sprintf("%.3f**", round(p.value, 3))), 
+                     sub("^0", "", sprintf("%.3f", round(p.value, 3))))
+  ) %>% 
+  select(-daily_mh_var) %>% 
+    kable(booktabs=T, 
+          caption="Output for association between daily mental health feature and each daily friendship experience for participants' single closest friend, accounting for the previous day's mental health.",
+          longtable = T) %>% 
+  kableExtra::kable_styling(latex_options = "scale_down") %>% 
+  kableExtra::group_rows(mh_labels[1], 1, 9) %>% 
+  kableExtra::group_rows(mh_labels[2], 10, 18) %>%  
+  kableExtra::group_rows(mh_labels[3], 19, 27) %>% 
+  kableExtra::group_rows(mh_labels[4], 28, 36) %>% 
+  kableExtra::group_rows(mh_labels[5], 37, 45) %>% 
+  kableExtra::group_rows(mh_labels[6], 46, 54) %>% 
+  kableExtra::group_rows(mh_labels[7], 55, 63) %>% 
+  kableExtra::group_rows(mh_labels[8], 64, 72)
+```
+
+```{r mh-outcome-graph, fig.cap = "Association between each daily mental health feature and each daily friendship experience for participants' single closest friend, accounting for the previous day's mental health.", fig.height=8}
+# graph
+long_models_lag_mh %>%
+  select(-data, -model) %>%
+  unnest(cols = summary) %>%
+  filter(term %in% c("friend_score", "daily_lag_score")) %>%
+  mutate(
+    friend_quality = recode(friend_quality, !!!friend_quality_labels),
+    daily_mh_var = recode(daily_mh_var, !!!mh_labels),
+    term = recode(term, 
+                  friend_score = " ", 
+                  daily_lag_score = "Lagged Daily Score")
+  ) %>%
+  mutate(
+    sig = case_when(
+      conf.low > 0 ~ "yes pos",
+      conf.high < 0 ~ "yes neg",
+      TRUE ~ "no"
+    )
+  ) %>%
+  ggplot(aes(x = reorder(friend_quality, estimate), y = estimate, fill = sig)) +
+  geom_bar(stat = "identity") +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.5) +
+  coord_flip() +
+  scale_fill_manual(values = c("#D3C5CA", "#DD6E42", "#99C5B5")) +
+  guides(fill = "none") +
+  facet_wrap(~daily_mh_var + term, scales = "free") +
+  labs(
+    x = "Friend Quality",
+    y = "Estimate",
+    title = "Effects of Current Friend Score Controlling for Lagged Daily Score \non Daily Mental Health Variables"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size=12),
+    axis.text.x = element_text(size = 12), 
+    strip.text = element_text(size = 7)
+  )
+
+```
+
+## Model 3: With lag and FDR correction for multiple comparisons
+
+IN MAIN MANUSCRIPT
+
+Model 3 applies a false discovery rate (FDR) correction across all 72 models (9 friendship predictors × 8 affective outcomes) to control the proportion of false positives. Results significant at the FDR-corrected threshold of p \< .05 are bolded in the table above and depicted in color in the figure. This model constitutes the primary analysis reported in the main manuscript.
+
+```{r}
+long_models_lag_mh <- all_long %>%
+  pivot_longer(
+    cols = starts_with("DSR_2") & !ends_with("_lag"),
+    names_to = "friend_quality",
+    values_to = "friend_score",
+    values_drop_na = TRUE
+  ) %>%
+  pivot_longer(
+    cols = starts_with("DSR_3"),
+    names_to = "daily_mh_var",
+    values_to = "daily_score",
+    values_drop_na = TRUE
+  ) %>% 
+  mutate(
+    dmh_lag_var = ifelse(str_detect(daily_mh_var, "lag"), "lag_score", "daily_score"),
+    daily_mh_var = str_remove(daily_mh_var, "_lag")
+  ) %>% 
+  pivot_wider(names_from = dmh_lag_var, values_from = daily_score) %>% 
+  group_by(friend_quality, daily_mh_var) %>% 
+  nest() %>%
+  mutate(
+    model = map(data, ~lmer(daily_score ~ friend_score + lag_score + weekend + day + 1 + (1 + friend_score | tagid), data = .)),
+    summary = map(model, broom::tidy, conf.int = TRUE)
+  )
+
+mh_labels_alpha = sort(mh_labels)
+
+long_models_lag_mh <- long_models_lag_mh %>% 
+  ungroup() %>% 
+  select(-data, -model) %>% 
+  unnest(cols = summary) %>% 
+  filter(term == "friend_score") %>%  
+  mutate(
+    p.adjusted = p.adjust(p.value, method = "fdr"),  # FDR correction
+    friend_quality = recode(friend_quality, !!!friend_quality_labels),
+    daily_mh_var = recode(daily_mh_var, !!!mh_labels)
+  ) %>% 
+  arrange(daily_mh_var, friend_quality)
+
+sig_p <- which(long_models_lag_mh$p.value < .05)
+sig_p_adj <- which(long_models_lag_mh$p.adjusted < .05)
+
+
+```
+
+```{r fdr-tab}
+long_models_lag_mh %>% 
+  mutate(
+    across(starts_with("p"), printp),
+    across(where(is.numeric), printnum),
+    estimate = str_c(estimate, " [", conf.low, ", ", conf.high, "]")) %>%
+  select(friend_quality, estimate, p.value, p.adjusted) %>% 
+  kable(booktabs = T, 
+        caption = "Association of daily friendship experiences with participants' single closest friend on daily mental health features, accounting for the previous day's mental health. Using FDR correction for multiple comparisons.", 
+        longtable = T) %>% 
+  kableExtra::kable_styling(latex_options = "scale_down") %>% 
+  kableExtra::group_rows(mh_labels_alpha[1], 1, 9) %>% 
+  kableExtra::group_rows(mh_labels_alpha[2], 10, 18) %>%  
+  kableExtra::group_rows(mh_labels_alpha[3], 19, 27) %>% 
+  kableExtra::group_rows(mh_labels_alpha[4], 28, 36) %>% 
+  kableExtra::group_rows(mh_labels_alpha[5], 37, 45) %>% 
+  kableExtra::group_rows(mh_labels_alpha[6], 46, 54) %>% 
+  kableExtra::group_rows(mh_labels_alpha[7], 55, 63) %>% 
+  kableExtra::group_rows(mh_labels_alpha[8], 64, 72) %>% 
+  row_spec(sig_p, bold = T)
+
+```
+
+```{r fdr-graph, fig.cap = "Associations between daily friendship experiences and daily affective states (controlling for previous day's affect). Using FDR correction for multiple comparisons.", fig.height=8}
+
+plot_with_legend <- long_models_lag_mh %>%
+  filter(term %in% c("friend_score", "daily_lag_score")) %>%
+  mutate(
+    friend_quality = recode(friend_quality, !!!friend_quality_labels),
+    daily_mh_var = recode(daily_mh_var, !!!mh_labels),
+    term = recode(term, 
+                  friend_score = " ", 
+                  daily_lag_score = "Lagged Daily Score"),
+    sig = case_when(
+      p.adjusted >= .05 ~ "no",
+      estimate > 0 ~ "yes pos",
+      estimate < 0 ~ "yes neg",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  ggplot(aes(x = reorder(friend_quality, estimate), y = estimate, fill = sig)) +
+  geom_bar(stat = "identity") +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.5) +
+  coord_flip() +
+  scale_fill_manual(
+    values = c("no" = "#D3C5CA", "yes neg" = "#B9713A", "yes pos" = "#4F7AAB"),
+    labels = c("Not significant", "Significant (negative)", "Significant (positive)"),
+    name = "Significance"
+  ) +
+  facet_wrap(
+    ~daily_mh_var + term, 
+    scales = "free",
+    strip.position = "top"
+  ) +
+  labs(
+    x = "Friendship Experience",
+    y = "Estimate",
+    title = "Associations between daily friendship experiences and daily affective states (controlling for previous day's affect)."
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 12),
+    axis.text.x = element_text(size = 12),
+    axis.title.x = element_text(size = 13, face = "bold"),
+    axis.title.y = element_text(size = 13, face = "bold"),
+    strip.text = element_text(size = 12, face = "bold"),
+    strip.background = element_rect(fill = "white", colour = NA),
+    panel.spacing = unit(1.2, "lines"), 
+    legend.position = "right",           
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 13, face = "bold")
+  )
+
+legend <- get_legend(plot_with_legend)
+
+plot_with_legend_nolegend <- plot_with_legend + theme(legend.position = "none")
+
+final_plot <- plot_with_legend_nolegend +
+  inset_element(legend, left = 0.66, bottom = 0, right = 1, top = 0.33)
+
+final_plot
+
+
+```
+
+## Model 4: With lag and switching outcome and predictor
+
+Model 4 reverses the direction of prediction, regressing daily friendship experience scores onto same-day affective states while controlling for the prior day's friendship experience. This analysis addresses the possibility of reverse causation — that is, whether adolescents' mood shapes their perception of their friendship rather than the reverse. Results indicate that several affective states do predict subsequent perceptions of friendship quality, consistent with bidirectional transactional models of peer relationships and emotion. These findings are presented as supplementary and exploratory, and the primary conclusions of the manuscript remain focused on friendship-to-affect associations.
+
+```{r friendship-outcome}
+long_models_lag_friendship <- all_long %>%
+  pivot_longer(
+    cols = starts_with("DSR_2"),
+    names_to = "friend_quality",
+    values_to = "friend_score",
+    values_drop_na = TRUE
+  ) %>%
+  pivot_longer(
+    cols = starts_with("DSR_3") & !ends_with("_lag"),
+    names_to = "daily_mh_var",
+    values_to = "daily_score",
+    values_drop_na = TRUE
+  ) %>% 
+  mutate(
+    friendship_lag_var = ifelse(str_detect(friend_quality, "lag"), "friendship_lag_score", "friend_score"),
+    friend_quality = str_remove(friend_quality, "_lag")
+  ) %>% 
+  pivot_wider(names_from = friendship_lag_var, values_from = friend_score) %>% 
+  group_by(daily_mh_var, friend_quality) %>% 
+  nest() %>%
+  mutate(
+    model = map(data, 
+                ~lmer(friend_score ~ daily_score + friendship_lag_score + weekend + day + 1 + (1 + daily_score | tagid), data = .)),
+    summary = map(model, broom::tidy, conf.int = TRUE)
+  )
+
+long_models_lag_friendship <- long_models_lag_friendship %>% 
+  ungroup() %>% 
+  select(-data, -model) %>% 
+  unnest(cols = summary) %>% 
+  filter(term == "daily_score") %>%  
+  mutate(
+    p.adjusted = p.adjust(p.value, method = "fdr"),  # FDR correction
+    friend_quality = recode(friend_quality, !!!friend_quality_labels),
+    daily_mh_var = recode(daily_mh_var, !!!mh_labels)
+  ) %>% 
+  arrange(friend_quality, daily_mh_var)
+
+sig_p <- which(long_models_lag_friendship$p.value < .05)
+sig_p_adj <- which(long_models_lag_friendship$p.adjusted < .05)
+```
+
+```{r friendship-outcome-tab, results = 'asis'}
+long_models_lag_friendship %>% 
+  mutate(
+    across(starts_with("p"), printp),
+    across(where(is.numeric), printnum),
+    estimate = str_c(estimate, " [", conf.low, ", ", conf.high, "]")) %>%
+  select(daily_mh_var, estimate, p.value, p.adjusted) %>% 
+  kable(booktabs = T,
+        caption = "Association of daily mental health features on daily friendship experiences, accounting for the previous day's friendship experiences.",
+        longtable = T) %>% 
+  kableExtra::kable_styling(latex_options = "scale_down") %>% 
+  kableExtra::group_rows(friend_quality_labels[1], 1, 8) %>% 
+  kableExtra::group_rows(friend_quality_labels[2], 9, 16) %>%  
+  kableExtra::group_rows(friend_quality_labels[3], 17, 24) %>% 
+  kableExtra::group_rows(friend_quality_labels[4], 25, 32) %>% 
+  kableExtra::group_rows(friend_quality_labels[5], 33, 40) %>% 
+  kableExtra::group_rows(friend_quality_labels[6], 41, 48) %>% 
+  kableExtra::group_rows(friend_quality_labels[7], 49, 56) %>% 
+  kableExtra::group_rows(friend_quality_labels[8], 57, 64) %>%
+  kableExtra::group_rows(friend_quality_labels[9], 65, 72) %>% 
+  row_spec(sig_p, bold = T)
+
+```
+
+```{r friendship-outcome-graph, fig.cap = "Association of daily mental health features on daily friendship experiences, accounting for the previous day's friendship experiences.", fig.height=8}
+
+long_models_lag_friendship %>%
+  filter(term %in% c("daily_score", "daily_lag_score")) %>%
+  mutate(
+    friend_quality = recode(friend_quality, !!!friend_quality_labels),
+    daily_mh_var = recode(daily_mh_var, !!!mh_labels),
+    term = recode(term, 
+                  daily_score = " ", 
+                  daily_lag_score = "Lagged Daily Score")
+  ) %>% 
+  mutate(
+    sig = case_when(
+      p.adjusted >= .05 ~ "no",
+      estimate > 0 ~ "yes pos",
+      estimate < 0 ~ "yes neg",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  ggplot(aes(x = reorder(daily_mh_var, estimate), y = estimate, fill = sig)) +
+  geom_bar(stat = "identity") +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.5) +
+  coord_flip() +
+  scale_fill_manual(values = c("#D3C5CA", "#DD6E42", "#99C5B5")) +
+  guides(fill = "none") +
+  facet_wrap(~friend_quality + term, scales = "free") +
+  labs(
+    x = "Daily Mental Health",
+    y = "Estimate",
+    title = "Effects of Daily Mental Health Controlling for Daily Friend Score \non Daily Friendship Quality"
+  ) +
+  theme_minimal() + 
+  theme(
+    axis.text.y = element_text(size=12),
+    axis.text.x = element_text(size = 12), 
+    strip.text = element_text(size = 7)
+  )
+  
+```
+
+# Sensitivity Analysis
+
+To address the concern that daily friendship experiences could be conflated with other interpersonal interactions, we also included daily romantic interactions as an additional covariate in sensitivity analyses.
+
+## Correlation between romantic experiences and friendship experiences
+
+```{r correlation-romance-friendship}
+dsr2_cols <- names(all_long) %>% 
+  keep(~ str_detect(.x, "^DSR_2_") & !str_detect(.x, "_lag$"))
+
+q7_cols <- names(all_long) %>% 
+  keep(~ str_detect(.x, "^Q7_") & !str_detect(.x, "_lag$"))
+
+#person-level means
+avg_dsr2 <- all_long %>%
+  group_by(tagid) %>%
+  summarise(across(all_of(dsr2_cols), ~ mean(.x, na.rm = TRUE)), .groups = "drop")
+
+avg_q7 <- all_long %>%
+  group_by(tagid) %>%
+  summarise(across(all_of(q7_cols), ~ mean(.x, na.rm = TRUE)), .groups = "drop")
+
+avg_both <- avg_dsr2 %>%
+  inner_join(avg_q7, by = "tagid") %>%
+  select(-tagid)
+
+ct <- psych::corr.test(avg_both[, dsr2_cols], avg_both[, q7_cols], use = "pairwise")
+
+friend_item_names <- c(
+  "DSR_2_1" = "Supported",
+  "DSR_2_2" = "Rejected",
+  "DSR_2_3" = "Lonely",
+  "DSR_2_4" = "Secure",
+  "DSR_2_5" = "Jealous",
+  "DSR_2_6" = "Trusted",
+  "DSR_2_7" = "Valued",
+  "DSR_2_8" = "Stressed",
+  "DSR_2_9" = "Understood"
+)
+
+rom_item_names <- c(
+  "Q7_2"  = "Supported",
+  "Q7_3"  = "Lonely",
+  "Q7_4"  = "Secure",
+  "Q7_5"  = "Jealous",
+  "Q7_6"  = "Trusted",
+  "Q7_7"  = "Valued",
+  "Q7_8"  = "Stressed",
+  "Q7_9"  = "Understood",
+  "Q7_10" = "Loved",
+  "Q7_1"  = "Rejected"
+)
+
+r_df <- as.data.frame(ct$r) %>%
+  tibble::rownames_to_column("friend_item") %>%
+  pivot_longer(-friend_item, names_to = "rom_item", values_to = "r")
+
+p_df <- as.data.frame(ct$p) %>%
+  tibble::rownames_to_column("friend_item") %>%
+  pivot_longer(-friend_item, names_to = "rom_item", values_to = "p")
+
+n_df <- as.data.frame(ct$n) %>%
+  tibble::rownames_to_column("friend_item") %>%
+  pivot_longer(-friend_item, names_to = "rom_item", values_to = "n")
+
+tab <- r_df %>%
+  left_join(p_df, by = c("friend_item", "rom_item")) %>%
+  left_join(n_df, by = c("friend_item", "rom_item")) %>%
+  mutate(
+    Friendship = recode(friend_item, !!!friend_item_names),
+    Romance    = recode(rom_item, !!!rom_item_names),
+    r = round(r, 2),
+    p = ifelse(is.na(p), NA_character_,
+               ifelse(p < .001, "<.001", sub("^0", "", sprintf("%.3f", p)))),
+    n = as.integer(n)
+  ) %>%
+  select(Friendship, Romance, r, p, n) %>%
+  arrange(Friendship, Romance)
+
+kable(
+  tab,
+  booktabs = TRUE,
+  caption = "Correlations Between Daily Friendship Items (DSR\\_2) and Daily Romantic Items (Q7), computed on person-level means",
+  col.names = c("Friendship item", "Romance item", "r", "p", "N"),
+  align = "llccc"
+) %>%
+  kable_styling(latex_options = c("scale_down", "repeat_header"), font_size = 9)
+```
+
+## Model 5: All daily friendship as predictors
+
+Model 5 entered all nine daily friendship experience items simultaneously as predictors of each affective outcome, alongside the prior day's affect. This approach tests the unique predictive contribution of each friendship experience after accounting for the shared variance across all other experiences. Given the moderate intercorrelations among friendship items, some effects observed in the single-predictor models were attenuated, as expected. Notably, feeling understood remained a unique positive predictor of self-confidence, and friendship stress remained a unique predictor of lower same-day anxious affect, after controlling for all other friendship experiences. These results should be interpreted with caution given multicollinearity among predictors, but they offer useful insight into which friendship experiences carry distinct predictive signal.
+
+```{r model-5}
+post_hoc <- all_long %>%
+  pivot_longer(
+    cols = starts_with("DSR_3"),
+    names_to = "daily_mh_var",
+    values_to = "daily_score",
+    values_drop_na = TRUE
+  ) %>%
+  mutate(
+    dmh_lag_var = ifelse(str_detect(daily_mh_var, "lag"), "lag_score", "daily_score"),
+    daily_mh_var = str_remove(daily_mh_var, "_lag")
+  ) %>%
+  pivot_wider(names_from = dmh_lag_var, values_from = daily_score) %>%
+  group_by(daily_mh_var) %>% 
+  nest() %>%
+  mutate(
+    model = map(data, ~ lmer(
+      daily_score ~ lag_score + DSR_2_1 + DSR_2_2 + DSR_2_3 + DSR_2_4 + 
+        DSR_2_5 + DSR_2_6 + DSR_2_7 + DSR_2_8 + DSR_2_9 + 
+        (1 | tagid),
+      data = .
+    )),
+    summary = map(model, broom.mixed::tidy, conf.int = TRUE)
+  )
+```
+
+```{r post-hoc-tab}
+post_hoc %>%
+  ungroup() %>%
+  select(-data, -model) %>%
+  unnest(cols = summary) %>%
+  filter(term %in% c("DSR_2_1", "DSR_2_2", "DSR_2_3", "DSR_2_4", 
+                     "DSR_2_5", "DSR_2_6", "DSR_2_7", "DSR_2_8", "DSR_2_9")) %>%
+  arrange(daily_mh_var, term) %>%
+  mutate(
+    term = recode(term,
+                  DSR_2_1 = "Supported",
+                  DSR_2_2 = "Rejected",
+                  DSR_2_3 = "Lonely",
+                  DSR_2_4 = "Secure",
+                  DSR_2_5 = "Jealous",
+                  DSR_2_6 = "Trusted",
+                  DSR_2_7 = "Valued",
+                  DSR_2_8 = "Stressed",
+                  DSR_2_9 = "Understood"),
+    daily_mh_var = recode(daily_mh_var, !!!mh_labels),
+     across(starts_with("p"), printp),
+    across(where(is.numeric), printnum),
+    estimate = str_c(estimate, " [", conf.low, ", ", conf.high, "]")) %>%
+  select(term, estimate, p.value) %>%
+  kable(booktabs = T, caption = "All daily friendship experience variables simultaneously as predictors of each dail mental health outcome.", longtable = T) %>%
+  kable_styling(latex_options = "scale_down") %>%
+  kableExtra::group_rows(mh_labels[1], 1, 9) %>%
+  kableExtra::group_rows(mh_labels[2], 10, 18) %>%
+  kableExtra::group_rows(mh_labels[3], 19, 27) %>%
+  kableExtra::group_rows(mh_labels[4], 28, 36) %>%
+  kableExtra::group_rows(mh_labels[5], 37, 45) %>%
+  kableExtra::group_rows(mh_labels[6], 46, 54) %>%
+  kableExtra::group_rows(mh_labels[7], 55, 63) %>%
+  kableExtra::group_rows(mh_labels[8], 64, 72)
+```
+
+```{r, post-hoc-plot, fig.cap = "All daily friendship experience variables simultaneously as predictors of each dail mental health outcome.", fig.height=8}
+post_hoc %>%
+  ungroup() %>%
+  select(-data, -model) %>%
+  unnest(cols = summary) %>%
+  filter(term %in% c("DSR_2_1", "DSR_2_2", "DSR_2_3", "DSR_2_4", 
+                     "DSR_2_5", "DSR_2_6", "DSR_2_7", "DSR_2_8", "DSR_2_9")) %>%
+  mutate(
+    term = recode(term,
+                  DSR_2_1 = "Supported",
+                  DSR_2_2 = "Rejected",
+                  DSR_2_3 = "Lonely",
+                  DSR_2_4 = "Secure",
+                  DSR_2_5 = "Jealous",
+                  DSR_2_6 = "Trusted",
+                  DSR_2_7 = "Valued",
+                  DSR_2_8 = "Stressed",
+                  DSR_2_9 = "Understood"),
+    daily_mh_var = recode(daily_mh_var, !!!mh_labels),
+    sig = case_when(
+      conf.low > 0 ~ "yes pos",
+      conf.high < 0 ~ "yes neg",
+      TRUE ~ "no"
+    )
+  ) %>%
+  ggplot(aes(x = reorder(term, estimate), y = estimate, fill = sig)) +
+  geom_bar(stat = "identity") +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.5) +
+  coord_flip() +
+  scale_fill_manual(values = c("#D3C5CA", "#DD6E42", "#99C5B5")) +
+  guides(fill = "none") +
+  facet_wrap(~daily_mh_var, scales = "free") +
+  labs(
+    x = "Predictor",
+    y = "Estimate",
+    title = "Effects of Friend Scores Controlling for Lagged Daily Score \non Daily Mental Health Variables"
+  ) +
+  theme_minimal()+
+  theme(
+    axis.text.y = element_text(size=12),
+    axis.text.x = element_text(size = 12), 
+    strip.text = element_text(size = 7)
+  )
+ 
+```
+
+As seen in Figure \@ref(fig:post-hoc-plot), jealousy significantly negatively predicted depressed scores when controlling for other predictors, including feelings of being supported, rejected, lonely, secure, trusted, valued, stressed, and understood. This suggests that higher levels of jealousy are uniquely associated with lower depressed scores, independent of the influence of other friendship experiences within an individual's single closest friendship. Stress significantly negatively predicted anxious scores when controlling for other friendship predictors. This indicates that greater feelings of stress independently correspond to reduced anxious scores. Feeling secure significantly negatively predicted sleepy scores after accounting for the effects of other predictors. This finding highlights that higher security feelings are uniquely linked to lower sleepy scores, regardless of other friendship dimensions. Feeling understood significantly positively predicted self-confident scores while controlling for other predictors. Greater feelings of being understood independently contribute to higher self-confidence. Feeling stressed (within one's single closest friendship) significantly negatively predicted stressed scores when accounting for other friendship qualities. This suggests a unique role of stress in reducing stressed scores, beyond the influence of other predictors.
+
+Overall, jealousy, stress, and feeling secure were found to independently reduce symptoms like depression, anxiety, and sleepiness, even when the effects of other predictors were accounted for. Feeling understood was uniquely associated with self-confidence, highlighting the specific role of this quality in enhancing positive mental health outcomes.
+
+## Model 6: Daily mental health and daily romance quality (with lag and FDR correction for multiple comparisons)
+
+This model mirrors the primary friendship analyses but substitutes daily romantic relationship experience as the predictor. Results are shown only for the subsample of participants who reported being in a romantic relationship (N = 31). Daily romantic experiences showed broad associations with same-day affect, particularly for joyful, excited, and self-confident outcomes, paralleling patterns observed for friendship experiences in the full sample. These results provide the basis for the supplementary comparison of friendship and romantic relationship effects reported in the main manuscript.
+
+```{r model-6}
+long_models_lag_mh <- all_long %>%
+  pivot_longer(
+    cols = starts_with("Q7_") & !ends_with("_lag"),
+    names_to = "romance_quality",
+    values_to = "romance_score",
+    values_drop_na = TRUE
+  ) %>%
+  pivot_longer(
+    cols = starts_with("DSR_3"),
+    names_to = "daily_mh_var",
+    values_to = "daily_score",
+    values_drop_na = TRUE
+  ) %>% 
+  mutate(
+    dmh_lag_var = ifelse(str_detect(daily_mh_var, "lag"), "lag_score", "daily_score"),
+    daily_mh_var = str_remove(daily_mh_var, "_lag")
+  ) %>% 
+  pivot_wider(names_from = dmh_lag_var, values_from = daily_score) %>% 
+  group_by(romance_quality, daily_mh_var) %>% 
+  nest() %>%
+  mutate(
+    model = map(data, ~lmer(daily_score ~ romance_score + lag_score + weekend + day + 1 + (1 + romance_score | tagid), data = .)),
+    summary = map(model, broom::tidy, conf.int = TRUE)
+  )
+
+mh_labels_alpha = sort(mh_labels)
+
+long_models_lag_mh <- long_models_lag_mh %>% 
+  ungroup() %>% 
+  select(-data, -model) %>% 
+  unnest(cols = summary) %>% 
+  filter(term == "romance_score") %>%  
+  mutate(
+    p.adjusted = p.adjust(p.value, method = "fdr"),  # FDR correction
+    friend_quality = recode(romance_quality, !!!romance_quality_labels),
+    daily_mh_var = recode(daily_mh_var, !!!mh_labels)
+  ) %>% 
+  arrange(daily_mh_var, romance_quality)
+
+sig_p <- which(long_models_lag_mh$p.value < .05)
+sig_p_adj <- which(long_models_lag_mh$p.adjusted < .05)
+```
+
+```{r romance-tab}
+long_models_lag_mh %>% 
+  mutate(
+    across(starts_with("p"), printp),
+    across(where(is.numeric), printnum),
+    estimate = str_c(estimate, " [", conf.low, ", ", conf.high, "]")) %>%
+  select(friend_quality, estimate, p.value, p.adjusted) %>% 
+  kable(booktabs = T, 
+        caption = "Association of daily romance experiences with participants' single closest friend on daily mental health features, accounting for the previous day's mental health. Using FDR correction for multiple comparisons.", 
+        longtable = T) %>% 
+  kableExtra::kable_styling(latex_options = "scale_down") %>% 
+  kableExtra::group_rows(mh_labels_alpha[1], 1, 10) %>% 
+  kableExtra::group_rows(mh_labels_alpha[2], 11, 20) %>%  
+  kableExtra::group_rows(mh_labels_alpha[3], 21, 30) %>% 
+  kableExtra::group_rows(mh_labels_alpha[4], 31, 40) %>% 
+  kableExtra::group_rows(mh_labels_alpha[5], 41, 50) %>% 
+  kableExtra::group_rows(mh_labels_alpha[6], 51, 60) %>% 
+  kableExtra::group_rows(mh_labels_alpha[7], 61, 70) %>% 
+  kableExtra::group_rows(mh_labels_alpha[8], 71, 80) %>% 
+  row_spec(sig_p, bold = T)
+
+```
+
+```{r romance-graph, fig.cap = "Associations between daily romantic experiences and daily affective states (controlling for previous day's affect). Using FDR correction for multiple comparisons.", fig.height=8}
+
+plot_with_legend2 <- long_models_lag_mh %>%
+  filter(term %in% c("romance_score", "daily_lag_score")) %>%
+  mutate(
+    romance_quality = recode(romance_quality, !!!romance_quality_labels),
+    daily_mh_var = recode(daily_mh_var, !!!mh_labels),
+    term = recode(term, 
+                  romance_score = " ", 
+                  daily_lag_score = "Lagged Daily Score"),
+    sig = case_when(
+      p.adjusted >= .05 ~ "no",
+      estimate > 0 ~ "yes pos",
+      estimate < 0 ~ "yes neg",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  ggplot(aes(x = reorder(romance_quality, estimate), y = estimate, fill = sig)) +
+  geom_bar(stat = "identity") +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.5) +
+  coord_flip() +
+  scale_fill_manual(
+    values = c("no" = "#D3C5CA", "yes neg" = "#B9713A", "yes pos" = "#4F7AAB"),
+    labels = c("Not significant", "Significant (negative)", "Significant (positive)"),
+    name = "Significance"
+  ) +
+  facet_wrap(
+    ~daily_mh_var + term, 
+    scales = "free",
+    strip.position = "top"
+  ) +
+  labs(
+    x = "Romance Quality",
+    y = "Estimate",
+    title = "Associations between daily romantic experiences and daily affective states (controlling for previous day's affect)."
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 12),
+    axis.text.x = element_text(size = 12),
+    axis.title.x = element_text(size = 13, face = "bold"),
+    axis.title.y = element_text(size = 13, face = "bold"),
+    strip.text = element_text(size = 12, face = "bold"),
+    strip.background = element_rect(fill = "white", colour = NA),
+    panel.spacing = unit(1.2, "lines"), 
+    legend.position = "right",           
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 13, face = "bold")
+  )
+
+legend2 <- get_legend(plot_with_legend2)
+
+plot_with_legend_nolegend2 <- plot_with_legend2 + theme(legend.position = "none")
+
+final_plot2 <- plot_with_legend_nolegend2 +
+  inset_element(legend, left = 0.66, bottom = 0, right = 1, top = 0.33)
+
+final_plot2
+
+
+```
+
+## Model 7: Daily mental health and daily friendship quality controlled by daily romance quality (with lag and FDR correction for multiple comparisons)
+
+Model 7 tests whether friendship effects observed in the primary analyses persist after including same-day romantic relationship experience as a covariate. This analysis is restricted to the subsample with available romantic relationship data (N = 31). As noted in the main manuscript, friendship effects were largely attenuated and non-significant in this model, while romantic relationship experiences showed relatively robust associations with affect. This pattern may reflect the reduced statistical power of the smaller subsample, the possibility that romantic relationship quality accounts for overlapping variance, or both. These results should be interpreted cautiously.
+
+```{r model-7}
+q7_cols <- names(all_long)[str_detect(names(all_long), "^Q7_") & !str_detect(names(all_long), "_lag$")]
+
+romance_cov <- all_long %>%
+  select(tagid, day, all_of(q7_cols)) %>%
+  mutate(across(all_of(q7_cols), ~ suppressWarnings(as.numeric(as.character(.))))
+  ) %>%
+  mutate(
+    romance_daily = rowMeans(across(all_of(q7_cols)), na.rm = TRUE),
+    romance_daily = ifelse(is.nan(romance_daily), NA, romance_daily)
+  ) %>%
+  select(tagid, day, romance_daily)
+
+
+romantic_ids <- romance_cov %>%
+  group_by(tagid) %>%
+  summarize(any_romance = any(!is.na(romance_daily))) %>%
+  filter(any_romance) %>%
+  pull(tagid)
+
+long_models_lag_mh_romctrl <- all_long %>%
+  left_join(romance_cov, by = c("tagid", "day")) %>%
+  filter(tagid %in% romantic_ids, !is.na(romance_daily)) %>%  #keeps rows where romance cov exists
+  pivot_longer(
+    cols = starts_with("DSR_2") & !ends_with("_lag"),
+    names_to = "friend_quality",
+    values_to = "friend_score",
+    values_drop_na = TRUE
+  ) %>%
+  pivot_longer(
+    cols = starts_with("DSR_3"),
+    names_to = "daily_mh_var",
+    values_to = "daily_score",
+    values_drop_na = TRUE
+  ) %>%
+  mutate(
+    dmh_lag_var = ifelse(str_detect(daily_mh_var, "lag"), "lag_score", "daily_score"),
+    daily_mh_var = str_remove(daily_mh_var, "_lag")
+  ) %>%
+  pivot_wider(names_from = dmh_lag_var, values_from = daily_score) %>%
+  group_by(friend_quality, daily_mh_var) %>%
+  nest() %>%
+  mutate(
+    model = map(
+      data,
+      ~ lmer(
+        daily_score ~ friend_score + romance_daily + lag_score + weekend + day +
+          (1 + friend_score | tagid),
+        data = .,
+        REML = FALSE,
+        control = lmerControl(optimizer = "bobyqa",
+                          optCtrl = list(maxfun = 2e5))
+      )
+    ),
+    summary = map(model, broom::tidy, conf.int = TRUE)
+  ) %>%
+  ungroup() %>%
+  select(-data, -model) %>%
+  unnest(cols = summary) %>%
+  filter(term == "friend_score") %>%
+  mutate(
+    p.adjusted = p.adjust(p.value, method = "fdr"),
+    friend_quality = recode(friend_quality, !!!friend_quality_labels),
+    daily_mh_var = recode(daily_mh_var, !!!mh_labels)
+  ) %>%
+  arrange(daily_mh_var, friend_quality)
+
+
+```
+
+```{r fdr-romance-ctrl-tab}
+long_models_lag_mh_romctrl %>% 
+  mutate(
+    extreme = abs(estimate) > 10 | abs(conf.low) > 10 | abs(conf.high) > 10,
+    across(starts_with("p"), printp),
+    across(where(is.numeric), printnum),
+    estimate = ifelse(extreme, 
+                      "converge error", 
+                      str_c(estimate, " [", conf.low, ", ", conf.high, "]"))
+  ) %>%
+  select(friend_quality, estimate, p.value, p.adjusted) %>%
+  kable(
+    booktabs = TRUE,
+    caption = "Associations between daily friendship experiences and daily mental health states, controlling for previous day's mental health and same-day romantic relationship experiences. Results shown for the subset of participants reporting romantic relationships. False discovery rate (FDR) correction applied for multiple comparisons.",
+    longtable = TRUE
+  ) %>%
+  kableExtra::kable_styling(latex_options = "scale_down") %>%
+  kableExtra::group_rows(mh_labels_alpha[1], 1, 9) %>%
+  kableExtra::group_rows(mh_labels_alpha[2], 10, 18) %>%  
+  kableExtra::group_rows(mh_labels_alpha[3], 19, 27) %>% 
+  kableExtra::group_rows(mh_labels_alpha[4], 28, 36) %>% 
+  kableExtra::group_rows(mh_labels_alpha[5], 37, 45) %>% 
+  kableExtra::group_rows(mh_labels_alpha[6], 46, 54) %>% 
+  kableExtra::group_rows(mh_labels_alpha[7], 55, 63) %>% 
+  kableExtra::group_rows(mh_labels_alpha[8], 64, 72) %>% 
+  kableExtra::row_spec(
+    which(long_models_lag_mh_romctrl$p.adjusted < .05),
+    bold = TRUE
+  )
+
+```
+
+## Model 8: Daily friendship on daily mental health (romantic relationship subset)
+
+The model comparison table above presents friendship-only (Model 78) and romance-controlled (Model 7) estimates side by side for each friendship experience and affective outcome within the romantic subsample. Comparing estimates across models allows direct inspection of how much friendship effects shift when romantic relationship quality is held constant. In most cases, effect sizes were modestly attenuated when romance was controlled, and few remained statistically significant after FDR correction, consistent with the interpretation that the romantic relationship subsample is underpowered to reliably detect friendship effects of the magnitude observed in the full sample.
+
+```{r model-8}
+long_models_lag_mh_romsubset <- all_long %>%
+  left_join(romance_cov, by = c("tagid", "day")) %>%
+  filter(tagid %in% romantic_ids, !is.na(romance_daily)) %>%  # same subset as Model 6
+  pivot_longer(
+    cols = starts_with("DSR_2") & !ends_with("_lag"),
+    names_to = "friend_quality",
+    values_to = "friend_score",
+    values_drop_na = TRUE
+  ) %>%
+  pivot_longer(
+    cols = starts_with("DSR_3"),
+    names_to = "daily_mh_var",
+    values_to = "daily_score",
+    values_drop_na = TRUE
+  ) %>%
+  mutate(
+    dmh_lag_var = ifelse(str_detect(daily_mh_var, "lag"), "lag_score", "daily_score"),
+    daily_mh_var = str_remove(daily_mh_var, "_lag")
+  ) %>%
+  pivot_wider(names_from = dmh_lag_var, values_from = daily_score) %>%
+  group_by(friend_quality, daily_mh_var) %>%
+  nest() %>%
+  mutate(
+    model = map(
+      data,
+      ~ lmer(
+        daily_score ~ friend_score + lag_score + weekend + day +
+          (1 + friend_score | tagid),
+        data = .,
+        REML = FALSE
+      )
+    ),
+    summary = map(model, broom::tidy, conf.int = TRUE)
+  ) %>%
+  ungroup() %>%
+  select(-data, -model) %>%
+  unnest(cols = summary) %>%
+  filter(term == "friend_score") %>%
+  mutate(
+    p.adjusted = p.adjust(p.value, method = "fdr"),
+    friend_quality = recode(friend_quality, !!!friend_quality_labels),
+    daily_mh_var = recode(daily_mh_var, !!!mh_labels)
+  ) %>%
+  arrange(daily_mh_var, friend_quality)
+```
+
+## Model comparisons
+
+### Comparing Model 6 and Model 7
+
+```{r model-comparison}
+model_comparison <- long_models_lag_mh_romsubset %>%
+  select(friend_quality, daily_mh_var, estimate, conf.low, conf.high, p.value, p.adjusted) %>%
+  mutate(model = "Friendship Only") %>%
+  bind_rows(
+    long_models_lag_mh_romctrl %>%
+      select(friend_quality, daily_mh_var, estimate, conf.low, conf.high, p.value, p.adjusted) %>%
+      mutate(model = "Friendship + Romance Controlled")
+  )
+
+model_comparison_display <- model_comparison %>%
+  mutate(
+    estimate = str_c(
+      round(estimate, 2), " [", 
+      round(conf.low, 2), ", ", 
+      round(conf.high, 2), "]"
+    ),
+    p.value   = printp(p.value),
+    p.adjusted = printp(p.adjusted)
+  ) %>%
+  select(friend_quality, daily_mh_var, model, estimate, p.value, p.adjusted) %>%
+  pivot_wider(
+    id_cols = c(friend_quality, daily_mh_var),
+    names_from = model,
+    values_from = c(estimate, p.value, p.adjusted)
+  ) %>%
+  arrange(daily_mh_var, friend_quality)
+
+names(model_comparison_display)
+
+groups_comp <- model_comparison_display %>%
+  mutate(row = row_number()) %>%
+  group_by(daily_mh_var) %>%
+  summarise(min = min(row), max = max(row), .groups = "drop") %>%
+  arrange(min)
+
+model_comparison_display <- model_comparison_display %>%
+  select(-daily_mh_var)
+
+ncol(model_comparison_display)  
+names(model_comparison_display)
+
+model_comparison_display_final <- model_comparison_display %>%
+  select(
+    friend_quality,
+    `estimate_Friendship Only`,
+    `p.value_Friendship Only`, 
+    `p.adjusted_Friendship Only`,
+    `estimate_Friendship + Romance Controlled`,
+    `p.value_Friendship + Romance Controlled`,
+    `p.adjusted_Friendship + Romance Controlled`
+  )
+
+kable(
+  model_comparison_display_final,
+  booktabs = TRUE,
+  caption = "Comparison of friendship-only vs. romance-controlled models on the romantic relationship subset.",
+  longtable = TRUE,
+  col.names = c(
+    "Friendship Quality",
+    "b [95\\% CI]", "p", "p adj.",
+    "b [95\\% CI]", "p", "p adj."
+  ),
+  align = "lcccccc",
+  escape = FALSE
+) %>%
+  add_header_above(c(
+    " " = 1,
+    "Friendship Only" = 3,
+    "Friendship + Romance Controlled" = 3
+  )) %>%
+  kable_styling(
+    latex_options = c("scale_down", "repeat_header", "hold_position"),
+    font_size = 9,
+    full_width = FALSE
+  ) %>%
+  group_rows(groups_comp$daily_mh_var[1], groups_comp$min[1], groups_comp$max[1]) %>%
+  group_rows(groups_comp$daily_mh_var[2], groups_comp$min[2], groups_comp$max[2]) %>%
+  group_rows(groups_comp$daily_mh_var[3], groups_comp$min[3], groups_comp$max[3]) %>%
+  group_rows(groups_comp$daily_mh_var[4], groups_comp$min[4], groups_comp$max[4]) %>%
+  group_rows(groups_comp$daily_mh_var[5], groups_comp$min[5], groups_comp$max[5]) %>%
+  group_rows(groups_comp$daily_mh_var[6], groups_comp$min[6], groups_comp$max[6]) %>%
+  group_rows(groups_comp$daily_mh_var[7], groups_comp$min[7], groups_comp$max[7]) %>%
+  group_rows(groups_comp$daily_mh_var[8], groups_comp$min[8], groups_comp$max[8]) %>%
+  column_spec(1, width = "2.5cm") %>%
+  column_spec(2, width = "2.8cm") %>%
+  column_spec(3, width = "1cm") %>%
+  column_spec(4, width = "1cm") %>%
+  column_spec(5, width = "2.8cm") %>%
+  column_spec(6, width = "1cm") %>%
+  column_spec(7, width = "1cm")
+```
+
+### Interaction
+
+The interaction models tested whether the association between daily friendship experience and affect was moderated by concurrent daily romantic relationship experience — that is, whether the two relational contexts amplified or dampened one another's affective significance. A small number of interaction terms reached statistical significance (see Table 3 in the main manuscript), suggesting that for some outcomes, friendship and romantic experiences do not operate entirely independently. However, given the small subsample size and the number of models estimated, these interaction effects should be treated as exploratory and interpreted with caution pending replication in larger samples.
+
+```{r model-romance-friendship}
+# build romance composite separately - avoids cross-join
+romance_composite <- all_long %>%
+  select(tagid, day, starts_with("Q7_") & !ends_with("_lag")) %>%
+  mutate(
+    romance_score = rowMeans(across(starts_with("Q7_")), na.rm = TRUE),
+    romance_score = ifelse(is.nan(romance_score), NA, romance_score)
+  ) %>%
+  select(tagid, day, romance_score)
+
+test = all_long %>%
+  pivot_longer(
+    cols = starts_with("DSR_2") & !ends_with("_lag"),
+    names_to = "friend_quality",
+    values_to = "friend_score",
+    values_drop_na = TRUE
+  ) %>%
+  pivot_longer(
+    cols = starts_with("DSR_3"),
+    names_to = "daily_mh_var",
+    values_to = "daily_score_raw",
+    values_drop_na = TRUE
+  ) %>%
+  mutate(
+    dmh_lag_var  = ifelse(str_detect(daily_mh_var, "lag"), "lag_score", "daily_score"),
+    daily_mh_var = str_remove(daily_mh_var, "_lag")
+  ) %>%
+  pivot_wider(names_from = dmh_lag_var, values_from = daily_score_raw) %>%
+  left_join(romance_composite, by = c("tagid", "day")) %>%
+  mutate(person = "friend_score") %>%
+  rename(score = friend_score) %>%
+  group_by(friend_quality, daily_mh_var) %>%
+  nest() %>%
+  mutate(
+    model = map(
+      data,
+      ~ lmer(
+        daily_score ~ score * romance_score +
+          lag_score +
+          weekend + day + 1 +
+          (1 + score | tagid),
+        data = .
+      )
+    ),
+    summary = map(model, broom.mixed::tidy, conf.int = TRUE)
+  )
+```
+
+```{r r-table-romance-friendship}
+results_tbl <- test %>% 
+  mutate(
+    inter = map(model, ~ broom.mixed::tidy(.x, effects = "fixed") %>%
+                  filter(term == "score:romance_score") %>%
+                  transmute(
+                    interaction_est = estimate,
+                    interaction_se  = std.error,
+                    interaction_df  = df,
+                    interaction_p   = p.value
+                  )
+    ),
+    slopes = map(model, ~ {
+      friend_trend <- emtrends(.x, specs = ~ 1, var = "score") %>%
+        summary(infer = TRUE) %>%
+        as.data.frame() %>%
+        transmute(
+          friend_simple_slope_est = score.trend,
+          friend_simple_slope_se  = SE,
+          friend_simple_slope_df  = df,
+          friend_simple_slope_p   = p.value
+        )
+
+      romance_trend <- emtrends(.x, specs = ~ 1, var = "romance_score") %>%
+        summary(infer = TRUE) %>%
+        as.data.frame() %>%
+        transmute(
+          romance_simple_slope_est = romance_score.trend,
+          romance_simple_slope_se  = SE,
+          romance_simple_slope_df  = df,
+          romance_simple_slope_p   = p.value
+        )
+
+      bind_cols(friend_trend, romance_trend)
+    })
+  ) %>%
+  select(friend_quality, daily_mh_var, inter, slopes) %>%
+  unnest(c(inter, slopes)) %>%
+  transmute(
+    friend_quality,
+    daily_mh_var,
+    interaction_est,
+    interaction_se,
+    interaction_df,
+    interaction_p,
+    friend_simple_slope_est,
+    friend_simple_slope_se,
+    friend_simple_slope_df,
+    friend_simple_slope_p,
+    romance_simple_slope_est,
+    romance_simple_slope_se,
+    romance_simple_slope_df,
+    romance_simple_slope_p
+  )
+
+results_tbl
+```
+
+```{r}
+sig_star <- function(p){
+  case_when(
+    is.na(p)      ~ "",
+    p <  .001     ~ "***",
+    p <  .01      ~ "**",
+    p <  .05      ~ "*",
+    p <  .1       ~ ".",
+    TRUE          ~ ""
+  )
+}
+
+friend_map <- c(
+  "DSR_2_1" = "supported",
+  "DSR_2_2" = "rejected",
+  "DSR_2_3" = "lonely",
+  "DSR_2_4" = "secure",
+  "DSR_2_5" = "jealous",
+  "DSR_2_6" = "trusted",
+  "DSR_2_7" = "valued",
+  "DSR_2_8" = "stressed",
+  "DSR_2_9" = "understood"
+)
+
+mh_map <- c(
+  "DSR_3_1" = "depressed",
+  "DSR_3_2" = "anxious",
+  "DSR_3_3" = "sleepy",
+  "DSR_3_4" = "self-confident",
+  "DSR_3_5" = "stressed",
+  "DSR_3_6" = "happy",
+  "DSR_3_7" = "joyful",
+  "DSR_3_8" = "excited"
+)
+```
+
+```{r, results='asis'}
+
+apa_results_tbl <- results_tbl %>%
+  mutate(
+    friend_quality = recode(friend_quality, !!!friend_map),
+    daily_mh_var   = recode(daily_mh_var, !!!mh_map),
+    across(ends_with("_est"), ~ round(.x, 3)),
+    across(ends_with("_se"),  ~ round(.x, 3)),
+    interaction_sig = sig_star(interaction_p),
+    friend_sig      = sig_star(friend_simple_slope_p),
+    romance_sig     = sig_star(romance_simple_slope_p)
+  ) %>%
+  select(
+    friend_quality, daily_mh_var,
+    interaction_est, interaction_se, interaction_sig,
+    friend_simple_slope_est,  friend_simple_slope_se,  friend_sig,
+    romance_simple_slope_est, romance_simple_slope_se, romance_sig
+  ) %>%
+  arrange(friend_quality, daily_mh_var) 
+
+groups = apa_results_tbl %>% 
+  mutate(row = row_number()) %>% 
+  with_groups(friend_quality, summarise, min = min(row), max = max(row))
+
+col_headers <- c(
+  "Friendship Variable",
+  "Daily Affect",
+  "Interaction $b$", "SE", "",
+  "Friendship $b$", "SE", "",
+  "Romance $b$", "SE", ""
+)
+
+kable(
+  apa_results_tbl,
+  booktabs = TRUE,
+  caption = "Interaction Effects and Simple Slopes Predicting Daily Affect",
+  col.names = col_headers,
+  align = "lccccccccc",
+  escape = FALSE,
+  longtable = TRUE   # keep this
+) %>%
+  add_header_above(c(
+    " " = 2,
+    "Interaction" = 3,
+    "Friendship effect (at mean romance)" = 3,
+    "Romance effect (at mean friendship)" = 3
+  )) %>%
+  kable_styling(
+    latex_options = c("repeat_header", "hold_position"),  # no scale_down
+    font_size = 7,
+    full_width = TRUE
+  ) %>%
+  landscape() %>%
+  column_spec(1, width = "1.8cm") %>%
+  column_spec(2, width = "1.8cm") %>%
+  column_spec(3, width = "1.2cm") %>%
+  column_spec(4, width = "0.8cm") %>%
+  column_spec(5, width = "0.4cm") %>%
+  column_spec(6, width = "1.2cm") %>%
+  column_spec(7, width = "0.8cm") %>%
+  column_spec(8, width = "0.4cm") %>%
+  column_spec(9, width = "1.2cm") %>%
+  column_spec(10, width = "0.8cm") %>%
+  column_spec(11, width = "0.4cm") %>%
+  footnote(
+    general = "Note. b = unstandardized estimate. “Friendship effect (at mean romance)” reflects the conditional effect of daily friendship experience on daily affect when daily romantic experience is held at its mean. “Romance effect (at mean friendship)” reflects the conditional effect of daily romantic experience when daily friendship experience is held at its mean. Significance codes: p <  .001~ ***, p <  .01 ~ **, p <  .05 ~ *",
+general_title = "Note.",
+    threeparttable = TRUE,
+    escape = FALSE
+  )
+```
+
+```{r}
+cor.test(all_long$DSR_2_8, all_long$Q7_8)
+
+ggplot(all_long, aes(x = DSR_2_8, y = Q7_8)) +
+  geom_point(size = 2, alpha = .70) +
+  labs(
+    title = "Association Between Friendship Stress and Romantic Relationship Stress",
+    x = "Friendship Stress",
+    y = "Romantic Relationship Stress"
+  ) +
+  theme_classic(base_size = 12) +
+  theme_apa()
+```
+
+The scatter plots above illustrate the relationship between daily friendship stress and daily romantic relationship stress across participants. Although the two variables were positively correlated, the association was modest, indicating that these represent meaningfully distinct relational experiences rather than a single generalized stress response. This distinction supports the conceptual rationale for treating friendship and romantic relationship experiences as separate relational contexts in the present analyses.
+
+```{r}
+df3 <- all_long %>%
+  filter(!is.na(DSR_2_8),
+         !is.na(Q7_8),
+         !is.na(DSR_3_5))
+
+ggplot(df3, aes(x = DSR_2_8, y = Q7_8, color = DSR_3_5)) +
+  geom_point(size = 2, alpha = 0.75) +
+  labs(
+    title = "Friendship Stress, Romantic Stress, and Daily Affect Stress",
+    x = "Friendship Stress",
+    y = "Romantic Stress",
+    color = "Daily Affect Stress"
+  ) +
+  theme_classic(base_size = 12) +
+  theme_apa()
+```
